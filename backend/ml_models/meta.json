@@ -1,0 +1,17 @@
+{
+  "feature_names": [
+    "required_skills_count",
+    "estimated_duration_minutes",
+    "historical_avg_duration",
+    "tech_experience_years",
+    "distance_km"
+  ],
+  "regressor": {
+    "model_file": "duration_rfr.joblib",
+    "mae": 7.002098627605043
+  },
+  "classifier": {
+    "model_file": "no_show_rfc.joblib",
+    "auc": 0.521414452009664
+  }
+}

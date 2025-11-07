@@ -1,0 +1,87 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: hofsmart
+      POSTGRES_USER: hofuser
+      POSTGRES_PASSWORD: hofpass
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - hofnet
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - hofnet
+
+  backend:
+    build: ./backend
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_ENV=development
+      - USE_SQLITE=false
+      - POSTGRES_DB=hofsmart
+      - POSTGRES_USER=hofuser
+      - POSTGRES_PASSWORD=hofpass
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      # Celery envs so Django can use them if needed; safe to set even if Celery not used
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      - db
+      - redis
+    networks:
+      - hofnet
+
+  celery_worker:
+    build: ./backend
+    command: celery -A server worker -l info --concurrency=1
+    depends_on:
+      - redis
+      - db
+      - backend
+    environment:
+      - DJANGO_ENV=development
+      - USE_SQLITE=false
+      - POSTGRES_DB=hofsmart
+      - POSTGRES_USER=hofuser
+      - POSTGRES_PASSWORD=hofpass
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DJANGO_SETTINGS_MODULE=server.settings
+    volumes:
+      - ./backend:/app
+    restart: on-failure
+    networks:
+      - hofnet
+
+  frontend:
+    build: ./frontend
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "3000:3000"
+    command: ["npm", "run", "dev"]
+    networks:
+      - hofnet
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  hofnet:

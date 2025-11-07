@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <!-- public/index.html -->
+<head>
+  <!-- ... -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('hof-theme');
+        if (t === 'dark' || (!t && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) { /* ignore */ }
+    })();
+  </script>
+
+  <!-- then load CSS / fonts etc. -->
+</head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

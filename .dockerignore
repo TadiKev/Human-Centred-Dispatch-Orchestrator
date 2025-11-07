@@ -1,0 +1,10 @@
+PS> @'
+node_modules
+*.log
+.git
+.gitignore
+.env
+.env.*
+venv
+.venv
+'@ | Out-File -Encoding utf8 .dockerignore
