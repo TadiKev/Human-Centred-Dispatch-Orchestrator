@@ -1,0 +1,16 @@
+{
+  "models": [
+    "model_noshow_v1.joblib"
+  ],
+  "metrics": [
+    {
+      "task": "no_show_classification",
+      "target": "was_no_show",
+      "n_train": 128,
+      "n_test": 33,
+      "auc_roc": 0.9516129032258065,
+      "precision": 0.9393939393939394,
+      "recall": 1.0
+    }
+  ]
+}

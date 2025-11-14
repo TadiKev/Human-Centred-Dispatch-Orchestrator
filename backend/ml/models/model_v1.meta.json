@@ -1,0 +1,35 @@
+{
+  "produced_at": "2025-11-12T12:25:38.766687Z",
+  "sklearn_version": "1.2.2",
+  "python_version": "3.11.0",
+  "models": [
+    "model_full_pipeline_noshow_v1.joblib"
+  ],
+  "metrics_summary": [
+    {
+      "task": "no_show_classification",
+      "target": "was_no_show",
+      "n_train": 128,
+      "n_test": 33,
+      "auc_roc": 0.9596774193548387,
+      "precision": 0.9393939393939394,
+      "recall": 1.0
+    }
+  ],
+  "feature_count": 13,
+  "features": [
+    "customer_name",
+    "num_required_skills",
+    "required_skill_ids",
+    "has_required_skills",
+    "assigned_technician_id",
+    "assigned_technician_username",
+    "tech_skill_match_count",
+    "distance_km",
+    "time_of_day",
+    "weekday",
+    "estimated_duration_minutes",
+    "was_completed",
+    "is_peak_hour"
+  ]
+}

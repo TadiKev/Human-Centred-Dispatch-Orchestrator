@@ -1,0 +1,37 @@
+{
+  "model_version": "v1",
+  "model_file": "model_noshow_v1.joblib",
+  "train_date": "2025-11-08T08:58:19.715993Z",
+  "train_data_rows": 128,
+  "features_used": [
+    "customer_name",
+    "num_required_skills",
+    "required_skill_ids",
+    "has_required_skills",
+    "assigned_technician_id",
+    "assigned_technician_username",
+    "tech_skill_match_count",
+    "distance_km",
+    "time_of_day",
+    "weekday",
+    "estimated_duration_minutes",
+    "was_completed"
+  ],
+  "hyperparams": {},
+  "metrics": {
+    "models": [
+      "model_noshow_v1.joblib"
+    ],
+    "metrics": [
+      {
+        "task": "no_show_classification",
+        "target": "was_no_show",
+        "n_train": 128,
+        "n_test": 33,
+        "auc_roc": 0.9516129032258065,
+        "precision": 0.9393939393939394,
+        "recall": 1.0
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "features": [
+    "customer_name",
+    "num_required_skills",
+    "required_skill_ids",
+    "has_required_skills",
+    "assigned_technician_id",
+    "assigned_technician_username",
+    "tech_skill_match_count",
+    "distance_km",
+    "time_of_day",
+    "weekday",
+    "estimated_duration_minutes",
+    "was_completed",
+    "is_peak_hour"
+  ]
+}
