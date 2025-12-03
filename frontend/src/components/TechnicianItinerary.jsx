@@ -175,6 +175,28 @@ export default function TechnicianItinerary({ techId, compact = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [techId, token, speed, algorithm, useCache, forceToggle, theme]);
 
+  // -------------------------------------------------------------------
+  // NEW: listen for global job updates so itinerary refreshes automatically
+  // -------------------------------------------------------------------
+  useEffect(() => {
+    const handler = () => {
+      // don't show loading spinner for background refresh; just refresh data
+      try {
+        fetchItinerary({ showLoading: false });
+        // optional: console log for debugging
+        // console.debug("TechnicianItinerary: caught jobs:changed -> refetching");
+      } catch (e) {
+        // ignore
+      }
+    };
+    window.addEventListener("jobs:changed", handler);
+    window.addEventListener("itinerary:refresh", handler); // alternate event name
+    return () => {
+      window.removeEventListener("jobs:changed", handler);
+      window.removeEventListener("itinerary:refresh", handler);
+    };
+  }, [fetchItinerary]);
+
   // helper: compare sequences to decide if OR-Tools changed order
   const currentIds = useMemo(() => (data?.current?.stops || []).map((s) => s.job_id), [data]);
   const optimizedIds = useMemo(() => (data?.optimized?.stops || []).map((s) => s.job_id), [data]);
@@ -309,7 +331,8 @@ export default function TechnicianItinerary({ techId, compact = false }) {
       {/* Map */}
       <div className="mt-4 rounded overflow-hidden border" style={{ minHeight: 240, borderColor: theme === "dark" ? "rgba(148,163,184,0.06)" : undefined }}>
         {allPositions.length > 0 ? (
-          <MapContainer center={allPositions[0]} zoom={11} style={{ height: 360, width: "100%" }} scrollWheelZoom={false}>
+          // NOTE: key forces remount when lastFetchedAt changes so Leaflet re-initialises with fresh center/bounds
+          <MapContainer key={`map-${lastFetchedAt ?? "initial"}`} center={allPositions[0]} zoom={11} style={{ height: 360, width: "100%" }} scrollWheelZoom={false}>
             <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
             {startPos && (

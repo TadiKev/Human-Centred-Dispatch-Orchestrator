@@ -1,31 +1,113 @@
+// frontend/src/pages/CustomerPortal.jsx
 import React, { useEffect, useState, useCallback } from "react";
 import { useAuth } from "../auth/AuthProvider";
-import JobCard from "../components/JobCard";
-import { useTheme } from "../theme/ThemeProvider";
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
-/**
- * CustomerPortal (modern redesign + details modal)
- * - Adds a View Details modal that appears when a JobCard requests it.
- * - JobCard is passed an `onView` callback — clicking "View details" inside JobCard
- *   should call that prop (or you can wire it to the card's main CTA).
- * - Details modal styles match the New Request modal (opaque, blurred backdrop).
- */
+/* Fix leaflet default icon paths (works with Vite/CRA) */
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.3/dist/images/marker-icon-2x.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.3/dist/images/marker-icon.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.3/dist/images/marker-shadow.png",
+});
 
+/* UI primitives */
+function Button({ children, variant = "primary", small = false, ...rest }) {
+  const base = "inline-flex items-center justify-center rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-offset-2";
+  const size = small ? "px-3 py-1 text-sm" : "px-4 py-2 text-sm";
+  const variants = {
+    primary: "bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-500",
+    ghost: "bg-transparent border border-gray-200 dark:border-[#172033] text-gray-800 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-[#071017] focus:ring-gray-300",
+    danger: "bg-rose-500 text-white hover:bg-rose-600 focus:ring-rose-400",
+  };
+  return (
+    <button className={`${base} ${size} ${variants[variant] || variants.primary}`} {...rest}>
+      {children}
+    </button>
+  );
+}
+function Card({ children, className = "" }) {
+  return <div className={`bg-white dark:bg-[#071017] border border-gray-100 dark:border-[#0b1220] rounded-xl p-4 shadow-sm ${className}`}>{children}</div>;
+}
+function Badge({ children, tone = "muted" }) {
+  const styles = {
+    muted: "bg-gray-100 text-gray-700 dark:bg-[#0b1220] dark:text-gray-200",
+    success: "bg-emerald-50 text-emerald-700",
+    info: "bg-sky-50 text-sky-700",
+    warn: "bg-amber-50 text-amber-700",
+  };
+  return <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${styles[tone] || styles.muted}`}>{children}</span>;
+}
+
+/* Modal with scroll-lock and Escape handling */
+function Modal({ open, onClose, title, children }) {
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") onClose && onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" aria-modal="true" role="dialog">
+      <div className="fixed inset-0 modal-backdrop bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div role="document" onClick={(e) => e.stopPropagation()} className="relative w-full max-w-4xl mx-4 modal-panel bg-white dark:bg-[#071017] border border-gray-200 dark:border-[#0b1220] rounded-2xl shadow-xl">
+        <div className="px-6 py-4 border-b border-gray-100 dark:border-[#0b1220] flex items-start justify-between">
+          <h3 className="text-lg font-semibold">{title}</h3>
+          <button onClick={onClose} className="text-sm text-gray-500 dark:text-gray-300">Close</button>
+        </div>
+        <div className="max-h-[75vh] overflow-y-auto px-6 py-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+function Toast({ toast }) {
+  if (!toast) return null;
+  const cls = toast.type === "error" ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-800";
+  return (
+    <div className="fixed bottom-6 right-6 z-60">
+      <div className={`${cls} p-3 rounded shadow-md`}>{toast.text}</div>
+    </div>
+  );
+}
+
+/* Click-to-set marker on Leaflet map */
+function ClickableMap({ onClick }) {
+  useMapEvents({
+    click(e) { onClick && onClick([e.latlng.lat, e.latlng.lng]); },
+  });
+  return null;
+}
+
+/* Main component */
 export default function CustomerPortal({ customerId: propCustomerId = null, apiBase = "/api" }) {
   const { auth } = useAuth();
-  const { theme } = useTheme();
-
-  const token = auth?.access || localStorage.getItem("access");
+  const token = auth?.access ?? localStorage.getItem("access") ?? null;
   const detectedCustomerId = propCustomerId || (auth?.user?.profile?.customer_id ?? auth?.user?.customer_id ?? null);
 
   const [customerId, setCustomerId] = useState(detectedCustomerId);
   const [companyName, setCompanyName] = useState(auth?.user?.company || auth?.user?.profile?.company || "Your Company");
+
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // modal form state (new request)
+  const [skills, setSkills] = useState([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsError, setSkillsError] = useState(null);
+
   const [showNewModal, setShowNewModal] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [toast, setToast] = useState(null);
+
   const [form, setForm] = useState({
     customer_name: auth?.user?.username || "",
     address: "",
@@ -33,69 +115,121 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
     requested_window_start: "",
     requested_window_end: "",
     estimated_duration_minutes: 60,
+    required_skill_ids: [],
+    lat: null,
+    lon: null,
   });
-  const [submitting, setSubmitting] = useState(false);
-  const [toast, setToast] = useState(null);
 
-  // details modal state
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
 
   useEffect(() => {
-    try {
-      document.documentElement.setAttribute("data-theme", theme);
-    } catch (e) {}
-  }, [theme]);
+    try { document.documentElement.setAttribute("data-theme", auth?.user?.profile?.theme || "dark"); } catch (e) {}
+  }, [auth]);
 
   const headers = {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  const normalizeAssigned = (raw) => {
-    if (!raw) return null;
-    if (typeof raw === "string") return raw;
-    if (typeof raw === "object") {
-      if (raw.display_name || raw.username) return raw.display_name || raw.username;
-      if (raw.user && typeof raw.user === "object") {
-        return raw.user.username || raw.user.email || JSON.stringify(raw.user);
+  // ---------------------------
+  // Geocode: server-first approach
+  // ---------------------------
+  const geocodeAddress = useCallback(async (address) => {
+    if (!address || !address.trim()) return null;
+
+    // 1) Try backend endpoint first (recommended). Implement GET /api/geocode/?q=... on server.
+    try {
+      const backendUrl = `${apiBase.replace(/\/$/, "")}/geocode/?q=${encodeURIComponent(address)}`;
+      const res = await fetch(backendUrl, { headers });
+      if (res.ok) {
+        const payload = await res.json();
+        // Accept multiple shapes: {lat,lon,label} or {latitude,longitude,display_name}
+        const lat = payload.lat ?? payload.latitude ?? payload.lat_dd ?? null;
+        const lon = payload.lon ?? payload.longitude ?? payload.lon_dd ?? null;
+        const label = payload.label ?? payload.display_name ?? payload.name ?? null;
+        if (lat != null && lon != null) return { lat: Number(lat), lon: Number(lon), label: label ?? address };
+      } else {
+        // backend returned non-OK (maybe endpoint not implemented)
+        console.warn("backend geocode responded", res.status);
       }
-      try {
-        if (raw.id) return raw.username || `tech-${raw.id}`;
-      } catch (e) {}
-      return JSON.stringify(raw);
+    } catch (e) {
+      console.warn("backend geocode error", e);
     }
-    return String(raw);
-  };
+
+    // 2) Fallback: do NOT call nominatim directly from browser by default (CORS/UA issues).
+    //    This is intentionally skipped — inform the user to enable server-side geocode.
+    setToast({
+      type: "error",
+      text: "Geocoding not available from client. Please enable the server-side /api/geocode/ endpoint.",
+    });
+    return null;
+  }, [apiBase, headers]);
+
+  // ---------------------------
+  // Browser geolocation helper
+  // ---------------------------
+  function useMyLocation() {
+    if (!navigator.geolocation) {
+      setToast({ type: "error", text: "Geolocation not supported by your browser." });
+      return;
+    }
+    setToast({ type: "info", text: "Requesting location permission..." });
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = Number(pos.coords.latitude.toFixed(6));
+        const lon = Number(pos.coords.longitude.toFixed(6));
+        setForm((p) => ({ ...p, lat, lon }));
+        setToast({ type: "success", text: "Location captured." });
+      },
+      (err) => {
+        console.error("geolocation error", err);
+        setToast({ type: "error", text: "Unable to get location — permission denied or unavailable." });
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+
+  // ---------------------------
+  // Fetch skills & requests
+  // ---------------------------
+  const fetchSkills = useCallback(async () => {
+    setSkillsLoading(true); setSkillsError(null);
+    try {
+      const url = `${apiBase.replace(/\/$/, "")}/skills/`;
+      const res = await fetch(url, { headers });
+      if (!res.ok) throw new Error(`Skills fetch failed ${res.status}`);
+      const data = await res.json();
+      let list = [];
+      if (Array.isArray(data)) list = data;
+      else if (Array.isArray(data.results)) list = data.results;
+      else list = data.items || [];
+      const norm = list.map((s) => ({ id: s.id ?? s.pk ?? s.skill_id, name: s.name ?? s.title ?? s.display_name ?? (s.slug || `skill-${s.id}`) }));
+      setSkills(norm);
+    } catch (err) {
+      console.error(err);
+      setSkillsError(err.message || "Failed to load skills");
+      setSkills([]);
+    } finally { setSkillsLoading(false); }
+  }, [apiBase, token]);
 
   const fetchRequests = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
+    setLoading(true); setError(null);
     try {
       let preferUrl;
-      if (customerId) {
-        preferUrl = `${apiBase.replace(/\/$/, "")}/customers/${encodeURIComponent(customerId)}/requests/`;
-      } else {
-        preferUrl = `${apiBase.replace(/\/$/, "")}/customers/me/requests/`;
-      }
+      if (customerId) preferUrl = `${apiBase.replace(/\/$/, "")}/customers/${encodeURIComponent(customerId)}/requests/`;
+      else preferUrl = `${apiBase.replace(/\/$/, "")}/customers/me/requests/`;
       const fallbackUrl = `${apiBase.replace(/\/$/, "")}/jobs/?page_size=50${customerId ? `&customer_id=${encodeURIComponent(customerId)}` : ""}`;
 
       let resp = await fetch(preferUrl, { headers });
-
-      if (resp.status === 404 && !customerId) {
-        resp = await fetch(fallbackUrl, { headers });
-      } else if (resp.status === 404 && customerId) {
+      if (resp.status === 404 && !customerId) resp = await fetch(fallbackUrl, { headers });
+      else if (resp.status === 404 && customerId) {
         const meUrl = `${apiBase.replace(/\/$/, "")}/customers/me/requests/`;
         resp = await fetch(meUrl, { headers });
         if (resp.status === 404) resp = await fetch(fallbackUrl, { headers });
       }
 
-      if (!resp.ok) {
-        const txt = await resp.text().catch(() => "");
-        throw new Error(`Server ${resp.status}: ${txt}`);
-      }
-
+      if (!resp.ok) { const txt = await resp.text().catch(() => ""); throw new Error(`Server ${resp.status}: ${txt}`); }
       const data = await resp.json();
 
       let list = [];
@@ -108,72 +242,53 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
 
       list = list.map((r) => {
         const assigned_raw = r.assigned_technician ?? r.assigned ?? r.technician ?? null;
-        const assigned_display = normalizeAssigned(assigned_raw);
-
+        const req_skills = Array.isArray(r.required_skills) ? r.required_skills.map((s) => (typeof s === "object" ? (s.id ?? s.pk ?? s.skill_id) : s)) : [];
         return {
           id: r.id ?? r.job_id,
-          customer_name: r.customer_name ?? r.title ?? r.summary ?? "Service request",
-          title: r.title ?? r.customer_name ?? r.summary ?? "Service request",
+          title: r.title ?? r.customer_name ?? r.summary ?? `Job #${r.id ?? r.job_id}`,
+          customer_name: r.customer_name ?? r.title ?? "Service request",
           status: (r.status || "").toLowerCase(),
           notes: r.notes ?? r.description ?? r.title ?? "",
-          address: r.address ?? r.location ?? "",
+          address: r.address ?? r.location ?? r.address_line ?? "",
           created_at: r.created_at ?? r.created,
-          assigned_technician: (typeof assigned_raw === "object" && assigned_raw !== null && assigned_raw.id) ? {
-            id: assigned_raw.id,
-            username: assigned_raw.username || assigned_raw.user?.username || null,
-            display_name: assigned_raw.display_name || assigned_raw.user?.get_full_name?.() || assigned_raw.username || assigned_raw.user?.username || null,
-            contact_phone: assigned_raw.contact_phone ?? assigned_raw.user?.profile?.phone ?? null,
-          } : assigned_display,
+          assigned_technician: (assigned_raw && typeof assigned_raw === "object" && assigned_raw.id)
+            ? { id: assigned_raw.id, username: assigned_raw.username || assigned_raw.user?.username || null, display_name: assigned_raw.display_name || assigned_raw.user?.get_full_name?.() || assigned_raw.username || assigned_raw.user?.username || null }
+            : (assigned_raw || null),
           estimated_arrival: r.estimated_arrival ?? r.meta?.diag?.predicted_arrival_iso ?? r.eta ?? null,
           completed_at: r.completed_at ?? r.meta?.completed_at ?? null,
           sla_flags: r.sla_flags ?? r.meta?.sla_flags ?? [],
+          required_skill_ids: req_skills,
+          lat: r.lat ?? r.location_lat ?? r.latitude ?? null,
+          lon: r.lon ?? r.location_lon ?? r.longitude ?? null,
           notes_raw: r,
         };
       });
 
       setRequests(list);
-
-      if (!customerId && data?.pagination && data?.pagination?.customer_id) {
-        setCustomerId(String(data.pagination.customer_id));
-      }
     } catch (err) {
-      console.error("fetchRequests error", err);
+      console.error(err);
       setError(err.message || "Failed to load requests");
       setRequests([]);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, [customerId, apiBase, token]);
 
-  useEffect(() => {
-    fetchRequests();
-  }, [fetchRequests]);
+  useEffect(() => { fetchRequests(); fetchSkills(); }, [fetchRequests, fetchSkills]);
 
-  useEffect(() => {
-    if (!toast) return;
-    const id = setTimeout(() => setToast(null), 3500);
-    return () => clearTimeout(id);
-  }, [toast]);
+  useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 3500); return () => clearTimeout(id); }, [toast]);
 
-  const statusVariant = (s) => {
-    const st = (s || "").toLowerCase();
-    if (st === "completed" || st === "done") return { label: "Completed", className: "variant-success" };
-    if (st === "assigned") return { label: "Assigned", className: "variant-info" };
-    if (st === "in_progress" || st === "in progress") return { label: "In progress", className: "variant-warn" };
-    if (st === "pending" || st === "new") return { label: "Pending", className: "variant-muted" };
-    return { label: st || "Unknown", className: "variant-muted" };
-  };
+  /* form helpers */
+  function updateForm(partial) { setForm((p) => ({ ...p, ...partial })); }
+  function toggleSkill(id) { setForm((prev) => { const cur = new Set(prev.required_skill_ids || []); if (cur.has(id)) cur.delete(id); else cur.add(id); return { ...prev, required_skill_ids: Array.from(cur) }; }); }
 
+  /* Submit new request */
   async function submitNewRequest(e) {
     e && e.preventDefault();
-    setSubmitting(true);
-    setError(null);
+    setSubmitting(true); setError(null);
 
-    if (!form.notes || form.notes.trim().length < 3) {
-      setToast({ type: "error", text: "Please provide a short description (min 3 characters)." });
-      setSubmitting(false);
-      return;
-    }
+    // Validation
+    if (!form.address || form.address.trim().length < 5) { setToast({ type: "error", text: "Address is required (min 5 characters)" }); setSubmitting(false); return; }
+    if (!form.notes || form.notes.trim().length < 3) { setToast({ type: "error", text: "Please provide a short description (min 3 characters)." }); setSubmitting(false); return; }
+    if (skills.length > 0 && (!form.required_skill_ids || form.required_skill_ids.length === 0)) { setToast({ type: "error", text: "Please select at least one required skill." }); setSubmitting(false); return; }
 
     try {
       const url = `${apiBase.replace(/\/$/, "")}/customers/me/requests/`;
@@ -184,361 +299,260 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
         requested_window_start: form.requested_window_start || null,
         requested_window_end: form.requested_window_end || null,
         estimated_duration_minutes: form.estimated_duration_minutes || null,
+        required_skill_ids: form.required_skill_ids || [],
+        lat: form.lat ?? null,
+        lon: form.lon ?? null,
       };
-      const resp = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-      });
-      if (!resp.ok) {
-        const txt = await resp.text().catch(() => "");
-        throw new Error(`Server ${resp.status}: ${txt}`);
+
+      // Fallback geocode on submit if missing (server-first)
+      if ((body.lat == null || body.lon == null) && body.address) {
+        const g = await geocodeAddress(body.address);
+        if (g) { body.lat = g.lat; body.lon = g.lon; updateForm({ lat: g.lat, lon: g.lon }); }
       }
-      const created = await resp.json();
+
+      const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+      if (!res.ok) { const txt = await res.text().catch(() => ""); throw new Error(`Server ${res.status}: ${txt}`); }
+      await res.json();
       setToast({ type: "success", text: "Service request submitted" });
       setShowNewModal(false);
-      setForm((f) => ({ ...f, address: "", notes: "", requested_window_start: "", requested_window_end: "" }));
+      setForm((f) => ({ ...f, address: "", notes: "", requested_window_start: "", requested_window_end: "", estimated_duration_minutes: 60, required_skill_ids: [], lat: null, lon: null }));
       await fetchRequests();
     } catch (err) {
       console.error("submitNewRequest error", err);
       setToast({ type: "error", text: err.message || "Failed to create request" });
-    } finally {
-      setSubmitting(false);
-    }
+    } finally { setSubmitting(false); }
   }
 
-  // open details modal for a request
-  function openDetails(req) {
-    setSelectedRequest(req);
-    setShowDetailModal(true);
+  /* details modal helpers */
+  function openDetails(req) { setSelectedRequest(req); setShowDetailModal(true); }
+  function closeDetails() { setSelectedRequest(null); setShowDetailModal(false); }
+
+  const summaryPending = requests.filter((r) => r.status === "pending" || r.status === "new").length;
+  const summaryInProgress = requests.filter((r) => r.status === "in_progress" || r.status === "assigned").length;
+  const summaryCompleted = requests.filter((r) => r.status === "completed" || r.status === "done").length;
+
+  /* JobCard (defensive) */
+  function JobCard({ job }) {
+    const status = (job.status || "").toLowerCase();
+    const label = status === "completed" || status === "done" ? "Completed" : status === "assigned" ? "Assigned" : status === "in_progress" ? "In progress" : status || "Pending";
+    const tone = status === "completed" ? "success" : status === "assigned" ? "info" : "muted";
+    const assigned = job.assigned_technician && typeof job.assigned_technician === "object"
+      ? (job.assigned_technician.display_name || job.assigned_technician.username || "Unassigned")
+      : (job.assigned_technician || "Unassigned");
+
+    return (
+      <article className="bg-white dark:bg-[#071017] border rounded-xl p-4 shadow-sm hover:shadow-md transition" role="article" aria-label={`Job ${job.id}`}>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <div className="text-sm text-slate-400">{job.customer_name}</div>
+            <div className="text-lg font-semibold mt-1">{job.title}</div>
+            <div className="text-sm text-slate-500 mt-1 break-words">{job.address || "—"}</div>
+          </div>
+          <div className="text-right flex-shrink-0">
+            <div className="mb-2"><Badge tone={tone}>{label}</Badge></div>
+            <div className="text-xs text-slate-400">ETA: {job.estimated_arrival || "—"}</div>
+          </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <div className="text-xs text-slate-500">Assigned: <strong className="text-slate-700">{assigned}</strong></div>
+          <div>
+            <Button variant="ghost" small onClick={() => openDetails(job)}>View</Button>
+          </div>
+        </div>
+      </article>
+    );
   }
 
-  function closeDetails() {
-    setSelectedRequest(null);
-    setShowDetailModal(false);
-  }
-
-  // helper to prefill and open new-request modal from a request ("Create similar")
-  function createSimilarFrom(req) {
-    setForm((f) => ({
-      ...f,
-      customer_name: req.customer_name || f.customer_name,
-      address: req.address || f.address,
-      notes: `Follow-up: ${req.notes || req.title || ""}`,
-      requested_window_start: "",
-      requested_window_end: "",
-    }));
-    setShowDetailModal(false);
-    setShowNewModal(true);
-  }
-
+  /* Render */
   return (
-    <div className="max-w-6xl mx-auto p-6">
-      {/* Theme variables + modern polish */}
-      <style>{`
-        [data-theme="dark"] {
-          --bg: #0b1120;
-          --panel: #071017;
-          --muted: #9aa7b8;
-          --text: #e6eef7;
-          --accent: #16a34a;
-          --glass: rgba(255,255,255,0.03);
-          --input-bg: #071017;
-          --input-border: rgba(255,255,255,0.06);
-          --placeholder: rgba(230,238,247,0.45);
-          --card-quiet-bg: #071017;
-          --card-quiet-border: rgba(255,255,255,0.04);
-          --scroll-thumb: rgba(255,255,255,0.06);
-          --shadow-strong: rgba(2,6,23,0.6);
-        }
-
-        [data-theme="light"] {
-          --bg: #f8fafb;
-          --panel: #ffffff;
-          --muted: #55607a;
-          --text: #0b1220;
-          --accent: #16a34a;
-          --glass: rgba(0,0,0,0.02);
-          --input-bg: #fff;
-          --input-border: rgba(2,6,23,0.06);
-          --placeholder: rgba(71,85,105,0.5);
-          --card-quiet-bg: #ffffff;
-          --card-quiet-border: rgba(2,6,23,0.06);
-          --scroll-thumb: rgba(0,0,0,0.12);
-          --shadow-strong: rgba(2,6,23,0.12);
-        }
-
-        body { background: var(--bg); }
-
-        .panel { background: var(--panel); color: var(--text); }
-        .muted { color: var(--muted); }
-        .accent { color: var(--accent); }
-
-        .btn-primary {
-          background: linear-gradient(180deg,var(--accent), #059669);
-          color: white; border: none; padding: 8px 12px; border-radius: 10px; font-weight:600;
-        }
-        .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--glass); padding: 8px 10px; border-radius: 10px; }
-
-        .card-quiet {
-          background: var(--card-quiet-bg);
-          border: 1px solid var(--card-quiet-border);
-          color: var(--text);
-          padding: 16px; border-radius: 12px;
-        }
-
-        .variant-success { background: rgba(16,185,129,0.09); color: #059669; padding: 4px 8px; border-radius: 6px; font-weight:600; font-size:12px;}
-        .variant-info { background: rgba(59,130,246,0.08); color: #2563eb; padding: 4px 8px; border-radius:6px; font-weight:600; font-size:12px;}
-        .variant-warn { background: rgba(245,158,11,0.08); color: #b45309; padding: 4px 8px; border-radius:6px; font-weight:600; font-size:12px;}
-        .variant-muted { background: rgba(148,163,184,0.06); color: var(--muted); padding: 4px 8px; border-radius:6px; font-weight:600; font-size:12px;}
-
-        /* Modal backdrop — stronger and with blur so popup doesn't look transparent */
-        .modal-backdrop { background: rgba(2,6,23,0.78); backdrop-filter: blur(6px); }
-
-        /* Opaque, elevated modal panel */
-        .modal-panel { background: var(--panel); border: 1px solid var(--card-quiet-border); padding: 20px; border-radius: 14px; box-shadow: 0 18px 40px var(--shadow-strong); }
-
-        /* Inputs */
-        .panel input, .panel textarea, .panel select, .panel .w-full.p-2 {
-          background: var(--input-bg); color: var(--text); border: 1px solid var(--input-border); padding: 10px; border-radius: 10px; outline: none;
-        }
-        .panel input:focus, .panel textarea:focus, .panel select:focus { box-shadow: 0 8px 20px rgba(59,130,246,0.06); transform: translateY(-1px); }
-
-        /* Toast — solid and legible */
-        .toast { padding: 12px 14px; border-radius: 12px; box-shadow: 0 8px 26px rgba(2,6,23,0.2); font-weight:600; }
-
-        .scrollable { scrollbar-width: thin; }
-        .scrollable::-webkit-scrollbar { height:8px; width:8px; }
-        .scrollable::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 8px; }
-
-        @media (max-width: 640px) { .card-quiet { padding: 12px; } }
-      `}</style>
-
+    <div className="max-w-7xl mx-auto p-6">
       <header className="flex items-center justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl font-bold" style={{ color: "var(--text)" }}>Service Portal</h1>
-          <div className="text-sm muted mt-1">{companyName}</div>
-          <div className="text-xs muted mt-1">Customer id: <strong>{customerId ?? "—"}</strong></div>
+          <h1 className="text-2xl font-bold">Service Portal</h1>
+          <div className="text-sm text-gray-500 dark:text-gray-300 mt-1">{companyName}</div>
+          <div className="text-xs text-gray-400 mt-1">Customer id: <strong>{customerId ?? "—"}</strong></div>
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowNewModal(true)}
-            className="btn-primary"
-            aria-label="Create new service request"
-          >
-            New Service Request
-          </button>
-
-          <button onClick={() => fetchRequests()} className="btn-ghost" disabled={loading} aria-label="Refresh requests">
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
+          <Button onClick={() => setShowNewModal(true)} variant="primary">New Service Request</Button>
+          <Button onClick={() => { fetchRequests(); fetchSkills(); }} variant="ghost" disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</Button>
         </div>
       </header>
 
       <section className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        {/* Informational / CTA card — no longer double-opens the modal when the JobCard also has a view */}
-        <div className="card-quiet flex flex-col items-start justify-between rounded-lg" style={{ minHeight: 110 }}>
-          <div>
-            <div className="text-sm muted">New Service Request</div>
-            <div className="text-3xl font-semibold mt-2" style={{ color: "var(--text)" }}>
-              {requests.filter(r => r.status === "pending" || r.status === "new").length}
-            </div>
-            <div className="text-xs muted mt-1">Requests awaiting submission or review</div>
-          </div>
+        <Card className="rounded-lg">
+          <div className="text-sm text-gray-500 dark:text-gray-300">New Service Request</div>
+          <div className="text-3xl font-semibold mt-2">{summaryPending}</div>
+          <div className="text-xs text-gray-400 mt-1">Requests awaiting submission or review</div>
+        </Card>
 
-          <div className="w-full mt-4 flex justify-end">
-            <button onClick={() => setShowNewModal(true)} className="btn-primary text-sm">Create request</button>
-          </div>
-        </div>
+        <Card className="rounded-lg">
+          <div className="text-sm text-gray-500 dark:text-gray-300">In Progress</div>
+          <div className="text-2xl font-semibold mt-2">{summaryInProgress}</div>
+        </Card>
 
-        <div className="card-quiet rounded-lg">
-          <div className="text-sm muted">In Progress</div>
-          <div className="text-2xl font-semibold" style={{ color: "var(--text)" }}>
-            {requests.filter(r => r.status === "in_progress" || r.status === "assigned").length}
-          </div>
-        </div>
-
-        <div className="card-quiet rounded-lg">
-          <div className="text-sm muted">Completed</div>
-          <div className="text-2xl font-semibold" style={{ color: "var(--text)" }}>
-            {requests.filter(r => r.status === "completed" || r.status === "done").length}
-          </div>
-        </div>
+        <Card className="rounded-lg">
+          <div className="text-sm text-gray-500 dark:text-gray-300">Completed</div>
+          <div className="text-2xl font-semibold mt-2">{summaryCompleted}</div>
+        </Card>
       </section>
 
       <section>
-        <h2 className="text-lg font-semibold" style={{ color: "var(--text)" }}>Your Service Requests</h2>
+        <h2 className="text-lg font-semibold mb-2">Your Service Requests</h2>
+        {loading && <div className="text-sm text-gray-500 mb-2">Loading...</div>}
+        {error && <div className="text-sm text-rose-700 bg-rose-50 p-3 rounded mb-2">{error}</div>}
 
-        {loading && <div className="text-muted mt-2">Loading...</div>}
-        {error && <div className="text-sm text-rose-700 bg-rose-50 p-3 rounded mt-2">{error}</div>}
-
-        <div className="space-y-4 mt-4">
-          {requests.length === 0 && !loading && (
-            <div className="card-quiet p-6 rounded shadow text-muted text-center">
-              No requests yet. Click <button onClick={() => setShowNewModal(true)} className="underline">New Service Request</button>.
-            </div>
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {!loading && requests.length === 0 && (
+            <div className="bg-white dark:bg-[#071017] border rounded-xl p-6 text-center text-gray-500 dark:text-gray-300">No requests yet. Click <button onClick={() => setShowNewModal(true)} className="underline">New Service Request</button>.</div>
           )}
 
-          {requests.map((r) => (
-            <JobCard key={r.id} job={r} onView={() => openDetails(r)} />
+          {loading && Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="p-4 rounded-xl bg-white dark:bg-[#071017] border border-gray-100 dark:border-[#0b1220] animate-pulse h-36" />
           ))}
+
+          {!loading && requests.map((r) => (<JobCard key={r.id} job={r} />))}
         </div>
       </section>
 
-      <footer className="mt-8 text-sm muted">
-        <div className="mb-2">Need Help? Our system assigns the best technician based on skills and availability. You'll receive updates via email and SMS.</div>
-        <div>Phone: +263-555-0100 · Email: <a href="mailto:support@hof-smart.com" className="underline">support@hof-smart.com</a></div>
-        <div className="mt-4 text-xs muted">Powered by HOF-SMART · © 2025 National University of Science and Technology</div>
-      </footer>
+      <footer className="mt-8 text-sm text-gray-500 dark:text-gray-300">Need Help? Our system assigns the best technician based on skills and availability. You&apos;ll receive updates via email and SMS.</footer>
 
-      {/* toast */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 toast ${toast.type === "error" ? "" : ""}`}>
-          <div className={toast.type === "error" ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-800"} style={{ padding: 10, borderRadius: 10 }}>
-            {toast.text}
-          </div>
-        </div>
-      )}
+      <Toast toast={toast} />
 
       {/* New Request Modal */}
-      {showNewModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4">
-          <form
-            onSubmit={submitNewRequest}
-            className="modal-panel w-full max-w-2xl panel"
-            role="dialog"
-            aria-modal="true"
-          >
-            <div className="flex items-start justify-between">
-              <h3 className="text-lg font-semibold">New Service Request</h3>
-              <button type="button" onClick={() => setShowNewModal(false)} className="text-sm muted">Close</button>
+      <Modal open={showNewModal} onClose={() => setShowNewModal(false)} title="New Service Request">
+        <form onSubmit={submitNewRequest} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm text-gray-500 dark:text-gray-300">Your name</label>
+              <input value={form.customer_name} onChange={(e) => updateForm({ customer_name: e.target.value })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" placeholder="Full name" />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-              <div>
-                <label className="text-sm muted">Your name</label>
-                <input
-                  value={form.customer_name}
-                  onChange={(e) => setForm({...form, customer_name: e.target.value})}
-                  className="w-full mt-1 p-2 rounded"
-                  placeholder="Full name"
-                />
-              </div>
-              <div>
-                <label className="text-sm muted">Address</label>
-                <input
-                  value={form.address}
-                  onChange={(e) => setForm({...form, address: e.target.value})}
-                  className="w-full mt-1 p-2 rounded"
-                  placeholder="Street, city, etc."
-                />
-              </div>
+            <div>
+              <label className="text-sm text-gray-500 dark:text-gray-300">Address <span className="text-xs text-gray-400">(required)</span></label>
+              <input
+                value={form.address}
+                onChange={(e) => updateForm({ address: e.target.value })}
+                onBlur={async () => {
+                  if (!form.address || form.address.trim().length < 5) return;
+                  const g = await geocodeAddress(form.address);
+                  if (g) { updateForm({ lat: g.lat, lon: g.lon }); setToast({ type: 'info', text: `Location found: ${g.label || form.address}` }); }
+                }}
+                className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]"
+                placeholder="Street, city, etc."
+              />
 
-              <div className="md:col-span-2">
-                <label className="text-sm muted">Description / Issue</label>
-                <textarea
-                  value={form.notes}
-                  onChange={(e) => setForm({...form, notes: e.target.value})}
-                  rows={4}
-                  className="w-full mt-1 p-2 rounded scrollable"
-                  placeholder="Describe the issue..."
-                />
-              </div>
+              <div className="mt-2 flex gap-2">
+                <Button type="button" variant="ghost" small onClick={async () => {
+                  if (!form.address) { setToast({ type: 'error', text: 'Enter address first' }); return; }
+                  const g = await geocodeAddress(form.address);
+                  if (!g) { setToast({ type: 'error', text: 'Could not geocode address — ensure server endpoint exists' }); return; }
+                  updateForm({ lat: g.lat, lon: g.lon }); setToast({ type: 'info', text: `Location found: ${g.label || form.address}` });
+                }}>Locate</Button>
 
-              <div>
-                <label className="text-sm muted">Preferred start (optional)</label>
-                <input
-                  type="datetime-local"
-                  value={form.requested_window_start}
-                  onChange={(e) => setForm({...form, requested_window_start: e.target.value})}
-                  className="w-full mt-1 p-2 rounded"
-                />
-              </div>
-              <div>
-                <label className="text-sm muted">Preferred end (optional)</label>
-                <input
-                  type="datetime-local"
-                  value={form.requested_window_end}
-                  onChange={(e) => setForm({...form, requested_window_end: e.target.value})}
-                  className="w-full mt-1 p-2 rounded"
-                />
-              </div>
+                <Button type="button" variant="ghost" small onClick={() => { updateForm({ lat: null, lon: null }); setToast({ type: 'info', text: 'Cleared saved location' }); }}>Clear location</Button>
 
-              <div>
-                <label className="text-sm muted">Estimated duration (min)</label>
-                <input
-                  type="number"
-                  min={15}
-                  value={form.estimated_duration_minutes}
-                  onChange={(e) => setForm({...form, estimated_duration_minutes: Number(e.target.value)})}
-                  className="w-full mt-1 p-2 rounded"
-                />
+                <Button type="button" variant="ghost" small onClick={() => useMyLocation()}>Use my location</Button>
+
+                <div className="ml-auto text-xs text-gray-400">Lat: <strong>{form.lat ?? '—'}</strong> · Lon: <strong>{form.lon ?? '—'}</strong></div>
               </div>
             </div>
 
-            <div className="mt-4 flex justify-end gap-2">
-              <button type="button" onClick={() => setShowNewModal(false)} className="btn-ghost">Cancel</button>
-              <button type="submit" disabled={submitting} className="btn-primary">
-                {submitting ? "Submitting…" : "Submit Request"}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* Details Modal */}
-      {showDetailModal && selectedRequest && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4">
-          <div className="modal-panel w-full max-w-2xl panel" role="dialog" aria-modal="true">
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-lg font-semibold">{selectedRequest.title || "Request details"}</h3>
-                <div className="text-xs muted mt-1">ID: <strong>{selectedRequest.id}</strong></div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <div className={statusVariant(selectedRequest.status).className} style={{ textTransform: 'capitalize' }}>{statusVariant(selectedRequest.status).label}</div>
-                <button type="button" onClick={closeDetails} className="text-sm muted">Close</button>
-              </div>
+            <div className="md:col-span-2">
+              <label className="text-sm text-gray-500 dark:text-gray-300">Description / Issue <span className="text-xs text-gray-400">(required)</span></label>
+              <textarea value={form.notes} onChange={(e) => updateForm({ notes: e.target.value })} rows={4} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" placeholder="Describe the issue..." />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-              <div>
-                <div className="text-sm muted">Customer</div>
-                <div className="mt-1 font-medium">{selectedRequest.customer_name}</div>
-
-                <div className="text-sm muted mt-3">Address</div>
-                <div className="mt-1">{selectedRequest.address || '—'}</div>
-
-                <div className="text-sm muted mt-3">Assigned technician</div>
-                <div className="mt-1">{typeof selectedRequest.assigned_technician === 'object' ? (selectedRequest.assigned_technician.display_name || selectedRequest.assigned_technician.username) : (selectedRequest.assigned_technician || 'Unassigned')}</div>
-              </div>
-
-              <div>
-                <div className="text-sm muted">Created</div>
-                <div className="mt-1">{selectedRequest.created_at || '—'}</div>
-
-                <div className="text-sm muted mt-3">ETA / Estimated arrival</div>
-                <div className="mt-1">{selectedRequest.estimated_arrival || '—'}</div>
-
-                <div className="text-sm muted mt-3">Completed at</div>
-                <div className="mt-1">{selectedRequest.completed_at || '—'}</div>
-              </div>
-
-              <div className="md:col-span-2">
-                <div className="text-sm muted">Notes</div>
-                <div className="mt-1 panel p-3 rounded scrollable" style={{ whiteSpace: 'pre-wrap' }}>{selectedRequest.notes || '—'}</div>
-              </div>
+            <div>
+              <label className="text-sm text-gray-500 dark:text-gray-300">Preferred start (optional)</label>
+              <input type="datetime-local" value={form.requested_window_start} onChange={(e) => updateForm({ requested_window_start: e.target.value })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" />
             </div>
 
-            <div className="mt-4 flex justify-end gap-2">
-              <button type="button" onClick={() => { createSimilarFrom(selectedRequest); }} className="btn-ghost">Create similar</button>
-              <button type="button" onClick={closeDetails} className="btn-primary">Done</button>
+            <div>
+              <label className="text-sm text-gray-500 dark:text-gray-300">Preferred end (optional)</label>
+              <input type="datetime-local" value={form.requested_window_end} onChange={(e) => updateForm({ requested_window_end: e.target.value })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" />
+            </div>
+
+            <div>
+              <label className="text-sm text-gray-500 dark:text-gray-300">Estimated duration (min)</label>
+              <input type="number" min={5} value={form.estimated_duration_minutes} onChange={(e) => updateForm({ estimated_duration_minutes: Number(e.target.value) })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" />
+            </div>
+
+            <div>
+              <label className="text-sm text-gray-500 dark:text-gray-300">Required skills {skills.length > 0 ? <span className="text-xs text-gray-400">(select one or more)</span> : <span className="text-xs text-gray-400">(optional)</span>}</label>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {skillsLoading ? <div className="text-sm text-gray-500">Loading skills…</div> : skills.length === 0 ? <div className="text-sm text-gray-500">No skills configured.</div> : skills.map((s) => {
+                  const active = (form.required_skill_ids || []).includes(s.id);
+                  return (
+                    <button key={s.id} type="button" onClick={() => toggleSkill(s.id)} className={`px-3 py-1 rounded-full text-xs font-medium ${active ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-800 dark:bg-[#0b1220] dark:text-gray-200"}`}>{s.name}</button>
+                  );
+                })}
+              </div>
+
+              {skills.length > 0 && (
+                <select multiple value={form.required_skill_ids.map(String)} onChange={(e) => { const opts = Array.from(e.target.selectedOptions).map((o) => Number(o.value)); updateForm({ required_skill_ids: opts }); }} className="w-full mt-2 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" size={4}>
+                  {skills.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              )}
+              {skillsError && <div className="text-xs text-rose-600 mt-1">{skillsError}</div>}
+            </div>
+
+            {/* Map preview */}
+            <div className="md:col-span-2">
+              <label className="text-sm text-gray-500 dark:text-gray-300">Location preview (click map to set marker)</label>
+              <div className="mt-2 rounded-lg overflow-hidden border border-gray-200 dark:border-[#0b1220]" style={{ height: 260 }}>
+                {form.lat && form.lon ? (
+                  <MapContainer center={[form.lat, form.lon]} zoom={14} style={{ height: '100%', width: '100%' }}>
+                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                    <Marker position={[form.lat, form.lon]}>
+                      <Popup>{form.address || 'Selected location'}</Popup>
+                    </Marker>
+                    <ClickableMap onClick={(pos) => updateForm({ lat: pos[0], lon: pos[1] })} />
+                  </MapContainer>
+                ) : (
+                  <MapContainer center={[-17.8252, 31.0335]} zoom={13} style={{ height: '100%', width: '100%' }}>
+                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                    <ClickableMap onClick={(pos) => updateForm({ lat: pos[0], lon: pos[1] })} />
+                  </MapContainer>
+                )}
+              </div>
+              <div className="text-xs text-gray-400 mt-2">Latitude: <strong>{form.lat ?? '—'}</strong> · Longitude: <strong>{form.lon ?? '—'}</strong></div>
             </div>
           </div>
-        </div>
-      )}
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setShowNewModal(false)}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={submitting}>{submitting ? 'Submitting…' : 'Submit Request'}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Details Modal */}
+      <Modal open={showDetailModal} onClose={closeDetails} title={selectedRequest ? (selectedRequest.title || `Request #${selectedRequest.id}`) : 'Request details'}>
+        {selectedRequest ? (
+          <div className="space-y-3">
+            <div className="text-sm text-gray-500">Customer</div>
+            <div className="font-medium">{selectedRequest.customer_name}</div>
+
+            <div className="text-sm text-gray-500 mt-2">Address</div>
+            <div>{selectedRequest.address || '—'}</div>
+
+            <div className="text-sm text-gray-500 mt-2">Assigned technician</div>
+            <div>{selectedRequest.assigned_technician && typeof selectedRequest.assigned_technician === 'object' ? (selectedRequest.assigned_technician.display_name || selectedRequest.assigned_technician.username) : (selectedRequest.assigned_technician || 'Unassigned')}</div>
+
+            <div className="text-sm text-gray-500 mt-2">Required skills</div>
+            <div>{Array.isArray(selectedRequest.required_skill_ids) && selectedRequest.required_skill_ids.length > 0 ? selectedRequest.required_skill_ids.join(', ') : <span className="text-gray-400">None specified</span>}</div>
+
+            <div className="text-sm text-gray-500 mt-2">Notes</div>
+            <div className="p-3 rounded bg-gray-50 dark:bg-[#071017] whitespace-pre-wrap">{selectedRequest.notes || '—'}</div>
+
+            <div className="flex justify-end">
+              <Button variant="primary" onClick={closeDetails}>Done</Button>
+            </div>
+          </div>
+        ) : <div>Loading…</div>}
+      </Modal>
     </div>
   );
 }

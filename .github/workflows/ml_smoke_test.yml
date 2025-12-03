@@ -1,0 +1,51 @@
+name: ML Smoke Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'backend/ml/**'
+      - '.github/workflows/ml_smoke_test.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t hof-smart-ml-service backend/ml_service
+
+      - name: Run container
+        run: |
+          docker run -d --name ml_service_ci -p 8000:8000 -v ${{ github.workspace }}/backend/ml/models:/app/ml/models hof-smart-ml-service
+          sleep 6
+
+      - name: Run smoke test (Python)
+        run: |
+          python - <<'PY'
+          import requests, json, sys, time
+          payload = {
+            "num_required_skills":2,
+            "tech_skill_match_count":1,
+            "distance_km":5.2,
+            "time_of_day":"morning",
+            "weekday":"Tuesday",
+            "estimated_duration_minutes":45,
+            "assigned_technician_id":42,
+            "was_completed":0
+          }
+          r = requests.post("http://127.0.0.1:8000/predict/no_show/", json=payload, timeout=10)
+          print("status", r.status_code)
+          j = r.json()
+          if r.status_code != 200:
+            print("ERR", j); sys.exit(2)
+          if "predictions" not in j:
+            print("Missing predictions"); sys.exit(2)
+          print("OK", j)
+          PY`
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f ml_service_ci || true

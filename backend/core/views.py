@@ -154,25 +154,38 @@ except Exception:
     regenerate_itinerary_task = None
 
 
+from django.core.cache import cache
+from django.conf import settings
+from django.shortcuts import get_object_or_404
+from rest_framework import status, permissions
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.utils import timezone
+
+# try to import ml_client & ttl (your existing pattern)
+try:
+    from . import ml_client  # adjust import path if needed
+    ML_CLIENT_AVAILABLE = True
+    ML_CACHE_TTL = getattr(settings, "ML_CACHE_TTL_SECONDS", 86400)
+except Exception:
+    ml_client = None
+    ML_CLIENT_AVAILABLE = False
+    ML_CACHE_TTL = 0
+
+# try to import a Job model - adapt if the model lives elsewhere
+try:
+    # common location - change "core" if your app name is different
+    from backend.core.models import Job
+except Exception:
+    try:
+        from core.models import Job
+    except Exception:
+        Job = None
+
+
 class TechnicianViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Read-only technicians list and a /me endpoint for the current technician.
-    Also exposes GET /api/technicians/{pk}/itinerary/
-    """
-    queryset = Technician.objects.select_related("user").prefetch_related("skills").all()
-    serializer_class = TechnicianSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
-    def me(self, request):
-        try:
-            tech = request.user.technician
-        except Technician.DoesNotExist:
-            return Response({"detail": "No technician profile for this user."}, status=status.HTTP_404_NOT_FOUND)
-        serializer = self.get_serializer(tech)
-        return Response(serializer.data)
-
-    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated], url_path="itinerary")
+    ...
+    @action(detail=True, methods=["get"], permission_classes=[permissions.IsAuthenticated], url_path="itinerary")
     def itinerary(self, request, pk=None):
         """
         GET /api/technicians/{pk}/itinerary/
@@ -205,7 +218,6 @@ class TechnicianViewSet(viewsets.ReadOnlyModelViewSet):
             now = timezone.now()
 
         cache_key = f"itinerary:tech:{tech.id}:speed:{int(speed_kmph)}"
-
         cached = None
         try:
             cached = cache.get(cache_key)
@@ -220,6 +232,56 @@ class TechnicianViewSet(viewsets.ReadOnlyModelViewSet):
                 except Exception:
                     pass
             return Response(cached)
+
+        # ----------------------------
+        # PRELOAD ML DURATIONS (best-effort)
+        # ----------------------------
+        if ML_CLIENT_AVAILABLE and Job is not None:
+            try:
+                # narrow to relevant jobs — tweak filters to match your schema:
+                # here we attempt to pick upcoming/scheduled jobs for this tech
+                jobs_qs = Job.objects.filter(assigned_technician_id=tech.id).order_by("scheduled_start")[:200]
+            except Exception:
+                try:
+                    # fallback generic query
+                    jobs_qs = Job.objects.filter(technician=tech).order_by("scheduled_start")[:200]
+                except Exception:
+                    jobs_qs = None
+
+            if jobs_qs:
+                for j in jobs_qs:
+                    try:
+                        cache_key_j = f"ml:duration:job:{j.id}:cached"
+                        pred_val = cache.get(cache_key_j)
+                    except Exception:
+                        pred_val = None
+
+                    if pred_val is None:
+                        try:
+                            # prefer a function that accepts a Job instance
+                            resp = ml_client.predict_duration_for_job(j, cache_ttl=None)
+                            if resp:
+                                pd = resp.get("predicted_duration") or resp.get("predictions") or None
+                                if isinstance(pd, (list, tuple)) and pd:
+                                    pred_val = float(pd[0])
+                                elif isinstance(pd, (int, float)):
+                                    pred_val = float(pd)
+                                # cache scalar
+                                if pred_val is not None:
+                                    try:
+                                        cache.set(cache_key_j, pred_val, timeout=ML_CACHE_TTL)
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pred_val = None
+
+                    # override estimated_duration_minutes if we have a scalar prediction
+                    if pred_val is not None:
+                        try:
+                            j.estimated_duration_minutes = int(round(pred_val))
+                        except Exception:
+                            pass
+        # If no Job model or no ml_client, this block is skipped (safe).
 
         # compute synchronously
         try:
@@ -241,6 +303,7 @@ class TechnicianViewSet(viewsets.ReadOnlyModelViewSet):
                 pass
 
         return Response(payload)
+
 
 
 class JobViewSet(viewsets.ModelViewSet):
@@ -1280,3 +1343,14 @@ class AnalyticsOverviewAPIView(APIView):
             }
         }
         return Response(data, status=status.HTTP_200_OK)
+
+# core/views.py (append)
+from django.http import JsonResponse
+from django.conf import settings
+import json, os
+
+def ml_model_info(request):
+    meta_path = os.path.join(settings.BASE_DIR, 'ml', 'models', 'model_v1.meta.json')
+    if os.path.exists(meta_path):
+        return JsonResponse(json.loads(open(meta_path).read()))
+    return JsonResponse({'error': 'meta not found'}, status=404)

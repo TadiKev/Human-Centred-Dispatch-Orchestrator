@@ -1,7 +1,7 @@
-from django.urls import path, include
+﻿from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
-
+from . import views
 # Views / view classes
 from .views_sync import TechJobsAPIView, SyncAPIView, SyncConflictsList, ResolveConflictAPIView
 from .views_ml import PredictDurationAPIView, PredictNoShowAPIView
@@ -52,9 +52,9 @@ urlpatterns = [
     # Technician itinerary
     path("technicians/<int:pk>/itinerary/", TechnicianViewSet.as_view({"get": "itinerary"}), name="technician-itinerary"),
 
-    # ML helpers
-    path("predict/duration/", PredictDurationAPIView.as_view(), name="predict-duration"),
-    path("predict/no_show/", PredictNoShowAPIView.as_view(), name="predict-no-show"),
+    # ML helpers (use the class names exactly as defined in core/views_ml.py)
+    path("ml/predict/duration/", PredictDurationAPIView.as_view(), name="predict-duration"),
+    path("ml/predict/noshow/", PredictNoShowAPIView.as_view(), name="predict-noshow"),
 
     # SLA
     path("sla/overview/", SLAOverviewAPIView.as_view(), name="sla-overview"),
@@ -66,4 +66,7 @@ urlpatterns = [
     # Customer-facing endpoints
     path("customers/me/requests/", CustomerRequestsMeAPIView.as_view(), name="customer-requests-me"),
     path("customers/<str:customer_id>/requests/", CustomerRequestsAPIView.as_view(), name="customer-requests"),
+
+    path('ml/model_info/', views.ml_model_info, name='ml_model_info'),
 ]
+

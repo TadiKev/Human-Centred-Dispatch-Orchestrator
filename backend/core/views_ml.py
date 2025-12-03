@@ -1,49 +1,82 @@
-# backend/core/views_ml.py
+﻿# backend/core/views_ml.py
+import logging
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 
-from .models import Job, Technician
-from .ml.model_store import extract_features_from_job, predict_for_features
+from .models import Job
+from . import ml_client
+
+LOG = logging.getLogger("core.views_ml")
+
 
 class PredictDurationAPIView(APIView):
+    """
+    POST /api/ml/predict/duration/
+    Body: arbitrary job-like json. Optional query param job_id to attach result to a Job.meta field.
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        body = request.data or {}
-        job_id = body.get("job_id")
-        features = body.get("features")
+        payload = request.data or {}
+        job_id = request.query_params.get("job_id") or payload.get("job_id")
+        try:
+            result = ml_client.predict_duration(payload)
+        except Exception as e:
+            LOG.exception("Duration prediction failed: %s", e)
+            return Response({"detail": "ml_call_failed"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        if job_id and not features:
-            job = get_object_or_404(Job, pk=job_id)
-            tech = getattr(job, "assigned_technician", None)
-            features = extract_features_from_job(job, technician=tech)
+        # optional: persist into Job.meta.predicted_duration if job_id provided
+        if job_id:
+            try:
+                job = get_object_or_404(Job, pk=int(job_id))
+                meta = job.meta or {}
+                # store only scalar predicted value for convenience
+                pd = result.get("predicted_duration")
+                if pd and isinstance(pd, (list, tuple)):
+                    meta["predicted_duration"] = float(pd[0])
+                elif isinstance(pd, (int, float)):
+                    meta["predicted_duration"] = float(pd)
+                job.meta = meta
+                job.save(update_fields=["meta"])
+            except Exception as e:
+                LOG.debug("Failed to save predicted duration into job.meta: %s", e)
 
-        if not features:
-            return Response({"detail": "Provide job_id or features"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
 
-        res = predict_for_features(features)
-        return Response({"prediction": res})
 
 class PredictNoShowAPIView(APIView):
+    """
+    POST /api/ml/predict/noshow/
+    Body: arbitrary job-like json. Optional query param job_id for persistence.
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        # same behavior (we can reuse predict_for_features)
-        body = request.data or {}
-        job_id = body.get("job_id")
-        features = body.get("features")
+        payload = request.data or {}
+        job_id = request.query_params.get("job_id") or payload.get("job_id")
+        try:
+            result = ml_client.predict_no_show(payload)
+        except Exception as e:
+            LOG.exception("No-show prediction failed: %s", e)
+            return Response({"detail": "ml_call_failed"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        if job_id and not features:
-            job = get_object_or_404(Job, pk=job_id)
-            tech = getattr(job, "assigned_technician", None)
-            features = extract_features_from_job(job, technician=tech)
+        # optional persistence
+        if job_id:
+            try:
+                job = get_object_or_404(Job, pk=int(job_id))
+                meta = job.meta or {}
+                # store probability if present
+                probs = result.get("probabilities")
+                if probs and isinstance(probs, (list, tuple)):
+                    meta["predicted_no_show_prob"] = float(probs[0])
+                elif isinstance(probs, (int, float)):
+                    meta["predicted_no_show_prob"] = float(probs)
+                job.meta = meta
+                job.save(update_fields=["meta"])
+            except Exception as e:
+                LOG.debug("Failed to save predicted no-show into job.meta: %s", e)
 
-        if not features:
-            return Response({"detail": "Provide job_id or features"}, status=status.HTTP_400_BAD_REQUEST)
-
-        res = predict_for_features(features)
-        # return only relevant keys for no-show endpoint
-        return Response({"no_show_prob": res["no_show_prob"], "features_used": res["features_used"], "feature_importances": res["feature_importances"]})
+        return Response(result)

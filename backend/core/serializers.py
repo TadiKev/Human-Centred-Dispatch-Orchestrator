@@ -1,8 +1,44 @@
+# core/serializers.py
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from .models import Profile, Technician, Skill, Job, Assignment, SLAAction
+from decimal import Decimal
+
+# geopy import for server-side geocoding (best-effort; dev use with Nominatim)
+try:
+    from geopy.geocoders import Nominatim
+    from geopy.exc import GeopyError
+    geolocator = Nominatim(user_agent="hof_smart_app/1.0 (dev)")
+except Exception:
+    geolocator = None
+    GeopyError = Exception  # fallback so code below can still reference GeopyError
+
 
 User = get_user_model()
+
+
+def _try_geocode_address(address):
+    """
+    Try to geocode an address using geopy.Nominatim.
+    Returns (Decimal(lat), Decimal(lon)) or (None, None) on failure.
+    This is best-effort and must not raise.
+    """
+    if not address:
+        return None, None
+    if not geolocator:
+        return None, None
+    try:
+        loc = geolocator.geocode(address, exactly_one=True, timeout=10)
+        if not loc:
+            return None, None
+        # quantize to 6 decimals
+        lat = Decimal(str(loc.latitude)).quantize(Decimal("0.000001"))
+        lon = Decimal(str(loc.longitude)).quantize(Decimal("0.000001"))
+        return lat, lon
+    except GeopyError:
+        return None, None
+    except Exception:
+        return None, None
 
 
 class ProfileSerializer(serializers.ModelSerializer):
@@ -133,6 +169,39 @@ class JobSerializer(serializers.ModelSerializer):
             username = None
         return {"id": tech.id, "username": username}
 
+    def create(self, validated_data):
+        """
+        On create, if lat/lon not provided but address present, attempt geocode (best-effort).
+        Keep behavior conservative: don't override provided coords and don't raise on geocode failure.
+        """
+        lat = validated_data.get("lat", None)
+        lon = validated_data.get("lon", None)
+        address = validated_data.get("address") or validated_data.get("location") or None
+
+        if (lat is None or lon is None) and address:
+            g_lat, g_lon = _try_geocode_address(address)
+            if g_lat is not None and g_lon is not None:
+                validated_data["lat"] = g_lat
+                validated_data["lon"] = g_lon
+
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        """
+        On update, if address changed (or provided) and coords missing, attempt geocode.
+        Do not overwrite existing coords if present in validated_data.
+        """
+        address = validated_data.get("address", None)
+        lat = validated_data.get("lat", None)
+        lon = validated_data.get("lon", None)
+        if address and (lat is None or lon is None):
+            g_lat, g_lon = _try_geocode_address(address)
+            if g_lat is not None and g_lon is not None:
+                # only set if not provided explicitly
+                validated_data.setdefault("lat", g_lat)
+                validated_data.setdefault("lon", g_lon)
+        return super().update(instance, validated_data)
+
 
 class JobCreateSerializer(serializers.Serializer):
     customer_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
@@ -141,19 +210,52 @@ class JobCreateSerializer(serializers.Serializer):
     requested_window_start = serializers.DateTimeField(required=False, allow_null=True)
     requested_window_end = serializers.DateTimeField(required=False, allow_null=True)
     estimated_duration_minutes = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    # accept optional lat/lon from frontend map
+    lat = serializers.DecimalField(required=False, allow_null=True, max_digits=9, decimal_places=6)
+    lon = serializers.DecimalField(required=False, allow_null=True, max_digits=9, decimal_places=6)
+    required_skill_ids = serializers.ListField(child=serializers.IntegerField(), required=False)
 
     def create(self, validated_data):
+        """
+        Create Job. Attempt geocode if coords missing and address provided.
+        Keep behavior minimal and safe.
+        """
         customer_name = validated_data.get("customer_name") or "Customer"
         status = getattr(Job, "STATUS_NEW", "new")
+
+        # Attempt geocode only if lat/lon not provided and address present
+        lat = validated_data.get("lat", None)
+        lon = validated_data.get("lon", None)
+        address = validated_data.get("address", "") or ""
+
+        if (lat is None or lon is None) and address:
+            g_lat, g_lon = _try_geocode_address(address)
+            if g_lat is not None and g_lon is not None:
+                validated_data["lat"] = g_lat
+                validated_data["lon"] = g_lon
+
         job = Job.objects.create(
             customer_name=customer_name,
-            address=validated_data.get("address", "") or "",
+            address=address,
             notes=validated_data.get("notes", "") or "",
             requested_window_start=validated_data.get("requested_window_start", None),
             requested_window_end=validated_data.get("requested_window_end", None),
             estimated_duration_minutes=validated_data.get("estimated_duration_minutes", None),
             status=status,
+            lat=validated_data.get("lat", None),
+            lon=validated_data.get("lon", None),
         )
+
+        # attach required skills if provided (many-to-many)
+        req_skill_ids = validated_data.get("required_skill_ids", None)
+        if req_skill_ids:
+            try:
+                skills_qs = Skill.objects.filter(id__in=req_skill_ids)
+                job.required_skills.set(skills_qs)
+            except Exception:
+                # be defensive: ignore errors setting skills rather than fail creation
+                pass
+
         return job
 
 

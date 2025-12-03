@@ -1,0 +1,119 @@
+name: ML Train, Package & Acceptance
+
+on:
+  push:
+    paths:
+      - 'backend/ml/**'
+  workflow_dispatch:
+
+env:
+  MODEL_OUT_DIR: backend/ml/models
+  MODEL_NAME: model_ci.joblib
+  ACCEPT_METRIC: auc
+  ACCEPT_THRESHOLD: '0.60'
+
+jobs:
+  train_and_check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f backend/ml/requirements.txt ]; then pip install -r backend/ml/requirements.txt; fi
+
+      - name: Run training
+        run: |
+          mkdir -p "${{ env.MODEL_OUT_DIR }}"
+          python backend/ml/train.py --out-dir "${{ env.MODEL_OUT_DIR }}" --model-name "${{ env.MODEL_NAME }}" --no-mlflow
+
+      - name: Show produced files
+        run: |
+          echo "Contents of ${{ env.MODEL_OUT_DIR }}:"
+          ls -la "${{ env.MODEL_OUT_DIR }}" || true
+
+      - name: Acceptance check (fail if metric < threshold)
+        env:
+          MODEL_OUT_DIR: ${{ env.MODEL_OUT_DIR }}
+          MODEL_NAME: ${{ env.MODEL_NAME }}
+          ACCEPT_METRIC: ${{ env.ACCEPT_METRIC }}
+          ACCEPT_THRESHOLD: ${{ env.ACCEPT_THRESHOLD }}
+        run: |
+          python - <<'PY'
+import json, os, sys, glob
+model_dir = os.environ['MODEL_OUT_DIR']
+model_name = os.environ['MODEL_NAME']
+metric_key = os.environ.get('ACCEPT_METRIC', 'auc')
+threshold = float(os.environ.get('ACCEPT_THRESHOLD', '0.6'))
+
+candidates = []
+candidates.append(os.path.join(model_dir, model_name + ".metrics.json"))
+candidates.append(os.path.join(model_dir, "metrics_v1.json"))
+basename_noext = os.path.splitext(model_name)[0]
+candidates.append(os.path.join(model_dir, basename_noext + ".metrics.json"))
+candidates.extend(sorted(glob.glob(os.path.join(model_dir, "*.metrics.json"))))
+candidates.extend(sorted(glob.glob(os.path.join(model_dir, "*metrics*.json"))))
+candidates = [c for c in candidates if os.path.isfile(c)]
+candidates = list(dict.fromkeys(candidates))
+
+if not candidates:
+    print("No metrics JSON found in", model_dir, file=sys.stderr)
+    sys.exit(2)
+
+metric_value = None
+used_file = None
+for c in candidates:
+    try:
+        with open(c, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            if metric_key in data and isinstance(data[metric_key], (int, float)):
+                metric_value = float(data[metric_key]); used_file = c; break
+            if "metrics" in data:
+                m = data["metrics"]
+                if isinstance(m, dict) and metric_key in m:
+                    metric_value = float(m[metric_key]); used_file = c; break
+                if isinstance(m, list):
+                    for item in m:
+                        if isinstance(item, dict) and metric_key in item:
+                            metric_value = float(item[metric_key]); used_file = c; break
+                    if metric_value is not None:
+                        break
+            for k,v in data.items():
+                try:
+                    if k.lower() == metric_key.lower() and isinstance(v, (int,float)):
+                        metric_value = float(v); used_file = c; break
+                except Exception:
+                    pass
+    except Exception as e:
+        print("Failed to parse", c, ":", e, file=sys.stderr)
+    if metric_value is not None:
+        break
+
+if metric_value is None:
+    print("Could not find metric", metric_key, "in any metrics JSON files", file=sys.stderr)
+    sys.exit(3)
+
+print(f"Using metrics file: {used_file}")
+print(f"{metric_key} = {metric_value:.6f}, threshold = {threshold:.6f}")
+
+if metric_value < threshold:
+    print(f"ACCEPTANCE FAILED: {metric_key} < {threshold}", file=sys.stderr)
+    sys.exit(4)
+
+print("ACCEPTANCE PASSED")
+sys.exit(0)
+PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ml-models
+          path: backend/ml/models/
