@@ -66,7 +66,7 @@ if CELERY_AVAILABLE and shared_task is not None:
             from .models import Job, Technician, Assignment
             from .auto_assign import rule_based_candidates
             from django.contrib.auth import get_user_model
-
+            
             JobModel = Job
             job = get_object_or_404(JobModel, pk=job_id)
             result = rule_based_candidates(job, weights=weights)

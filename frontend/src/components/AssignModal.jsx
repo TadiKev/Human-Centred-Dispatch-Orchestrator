@@ -1,124 +1,280 @@
 // frontend/src/components/AssignModal.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api/fetcher";
+import TechnicianWorkloadPanel from "./TechnicianWorkloadPanel";
 
-export default function AssignModal({ job, onClose, onAssigned, token }) {
+const FATIGUE_THRESHOLD = 0.8;
+
+export default function AssignModal({
+  job,
+  onClose,
+  onAssigned,
+  token: propToken,
+}) {
+  const token =
+    propToken ??
+    (typeof window !== "undefined"
+      ? localStorage.getItem("access")
+      : null);
+
   const [candidates, setCandidates] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [workloadMap, setWorkloadMap] = useState(new Map());
   const [assigningId, setAssigningId] = useState(null);
   const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
+  /* -------------------------------
+     Fetch candidate recommendations
+  -------------------------------- */
   useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+
     (async () => {
-      setLoading(true);
       try {
-        // call backend candidates endpoint (note the /api/ prefix)
-        const res = await apiFetch(`/api/jobs/${job.id}/candidates/`, { token });
-        // backend returns { job_id, candidates: [...] } — support that and other shapes
-        const list = res?.candidates ?? (Array.isArray(res) ? res : (res.results ?? []));
-        setCandidates(list);
+        const res = await apiFetch(
+          `/api/jobs/${job.id}/candidates/`,
+          { token }
+        );
+        const list = Array.isArray(res)
+          ? res
+          : res?.candidates ?? res?.results ?? [];
+        if (mounted) setCandidates(list);
       } catch (e) {
-        console.error("fetch candidates failed", e);
-        setCandidates([]);
+        console.error(e);
+        if (mounted) setError("Failed to load candidates");
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     })();
+
+    return () => {
+      mounted = false;
+    };
   }, [job.id, token]);
 
-  async function assign(tech) {
-    // guard: tech may have technician_id or id depending on server shape
-    const techId = tech.technician_id ?? tech.technician_id ?? tech.id ?? tech.technician;
+  /* -------------------------------
+     Receive workload from panel
+  -------------------------------- */
+  function handleWorkloadLoaded(items) {
+    const map = new Map();
+    items.forEach((it) => {
+      if (it.technician_id != null) {
+        map.set(Number(it.technician_id), it);
+      }
+    });
+    setWorkloadMap(map);
+  }
+
+  /* -------------------------------
+     Assignment
+  -------------------------------- */
+  async function assign(techId, candidate) {
+    if (!techId) return;
+
     setAssigningId(techId);
     try {
-      // Compose a robust score_breakdown, and add manual_reason when manager typed one.
-      const baseScore = tech.score_breakdown ?? { score: tech.score ?? null, note: tech.explanation?.text ?? "" };
-      const scoreWithManual = { ...baseScore };
-
-      const trimmedReason = (reason || "").toString().trim();
-      if (trimmedReason) {
-        scoreWithManual.manual_reason = trimmedReason;
-        scoreWithManual.manual_flag = true;
-      }
-
-      const payload = {
-        job_id: job.id,
-        technician_id: techId,
-        reason: trimmedReason ? trimmedReason : `Assigned by ${tech.username || tech.user?.username}: ${tech.explanation?.text || ""}`,
-        score_breakdown: scoreWithManual
-      };
-
-      await apiFetch("/api/assignments/", { method: "POST", body: payload, token });
-      // inform parent to reload lists etc.
-      onAssigned();
+      await apiFetch("/api/assignments/", {
+        method: "POST",
+        token,
+        body: {
+          job_id: job.id,
+          technician_id: techId,
+          reason:
+            reason ||
+            candidate?.explanation?.text ||
+            "Manual assignment",
+          score_breakdown: candidate?.score_breakdown,
+        },
+      });
+      onAssigned?.();
+      onClose?.();
     } catch (e) {
-      console.error("assignment failed", e);
-      alert("Assignment failed: " + (e.message || e));
+      alert("Assignment failed");
     } finally {
       setAssigningId(null);
     }
   }
 
+  /* -------------------------------
+     Helpers
+  -------------------------------- */
+  function backendReasons(candidate, workload) {
+    const reasons = [];
+
+    if (candidate?.explanation?.text) {
+      reasons.push(candidate.explanation.text);
+    }
+
+    const sb = candidate?.score_breakdown || {};
+
+    if (sb.skill_match)
+      reasons.push(`Strong skill match (${sb.skill_match}%)`);
+    if (sb.distance_minutes != null)
+      reasons.push(`Shortest ETA (${sb.distance_minutes} min)`);
+    if (sb.sla_risk_reduction)
+      reasons.push(
+        `Reduces SLA breach risk by ${sb.sla_risk_reduction}%`
+      );
+    if (sb.model_rank === 1)
+      reasons.push("Top-ranked by assignment model");
+
+    if (
+      workload &&
+      workload.fatigue_score >= FATIGUE_THRESHOLD &&
+      reasons.length > 0
+    ) {
+      reasons.unshift(
+        "⚠ Recommended despite fatigue due to operational impact"
+      );
+    }
+
+    return reasons;
+  }
+
+  /* -------------------------------
+     Render
+  -------------------------------- */
   return (
-    <div className="fixed inset-0 flex items-start justify-center p-6 z-50">
-      <div className="bg-white shadow-lg rounded-lg w-full max-w-3xl p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold">Assign Job #{job.id}</h3>
-          <button className="text-slate-500" onClick={onClose}>✕</button>
+    <div className="fixed inset-0 z-50 bg-black/40 flex justify-center items-center p-6">
+      <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="p-4 border-b dark:border-slate-700 flex justify-between">
+          <div>
+            <h3 className="text-lg font-semibold">
+              Assign Job #{job.id}
+            </h3>
+            <div className="text-sm text-slate-500">
+              {job.customer_name} — {job.address}
+            </div>
+          </div>
+          <button onClick={onClose}>✕</button>
         </div>
 
-        <div className="mb-4">
-          <div className="font-medium">{job.customer_name}</div>
-          <div className="text-sm text-slate-600">{job.address}</div>
-        </div>
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          {/* Reason */}
+          <div>
+            <label className="text-sm block mb-1">
+              Assignment reason (optional)
+            </label>
+            <textarea
+              className="w-full p-2 rounded border dark:bg-slate-800"
+              rows={2}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            />
+          </div>
 
-        <div className="mb-3">
-          <label className="text-sm">Reason/notes (optional)</label>
-          <textarea
-            className="form-textarea mt-1 w-full"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="Type reason (optional), leave empty to use candidate explanation"
+          {/* AUTHORITATIVE WORKLOAD */}
+          <TechnicianWorkloadPanel
+            apiBase="/api"
+            jobId={job.id}
+            onLoaded={handleWorkloadLoaded}
           />
-        </div>
 
-        <div>
-          <div className="text-sm font-medium mb-2">Candidate technicians</div>
-          {loading && <div>Loading candidates…</div>}
-          {!loading && candidates.length === 0 && <div className="text-slate-500">No candidate technicians found.</div>}
-          <div className="space-y-3">
-            {candidates.map(c => {
-              const techKey = c.technician_id ?? c.id ?? c.user?.id ?? c.username;
-              return (
-                <div key={techKey} className="p-3 border rounded flex justify-between items-center">
-                  <div>
-                    <div className="font-medium">
-                      {c.username ?? c.user?.username}{" "}
-                      <span className="text-sm text-slate-500">({c.status})</span>
-                    </div>
-                    <div className="text-sm text-slate-500">Score: {c.score}</div>
-                    <div className="text-xs text-slate-600 mt-1">{c.explanation?.text}</div>
-                    <div className="mt-2">
-                      {c.skills && c.skills.map(s => <span key={s.id} className="badge mr-1">{s.name}</span>)}
-                    </div>
-                  </div>
-                  <div>
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => assign(c)}
-                      disabled={assigningId !== null}
+          {/* Candidate overlay */}
+          <div>
+            <h4 className="font-semibold mb-2">
+              Backend recommendations
+            </h4>
+
+            {loading ? (
+              <div className="text-sm text-slate-500">
+                Loading…
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {candidates.map((c) => {
+                  const techId =
+                    c.technician_id ?? c.technician?.id;
+                  const workload = workloadMap.get(Number(techId));
+                  const fatigue = workload?.fatigue_score ?? 0;
+                  const blocked =
+                    fatigue >= FATIGUE_THRESHOLD;
+
+                  const reasons = backendReasons(
+                    c,
+                    workload
+                  );
+
+                  const technicianName =
+                    c.technician_summary?.username ??
+                    c.technician?.user?.username ??
+                    `Tech ${techId}`;
+
+                  return (
+                    <div
+                      key={techId}
+                      className={`p-3 border rounded-lg dark:border-slate-700 ${
+                        blocked
+                          ? "bg-rose-50 dark:bg-rose-900/20"
+                          : "bg-slate-50 dark:bg-slate-800"
+                      }`}
                     >
-                      {assigningId === techKey ? "Assigning…" : "Assign"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+                      <div className="flex justify-between">
+                        <div>
+                          <div className="font-medium">
+                            {technicianName}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            Fatigue:{" "}
+                            {Math.round(fatigue * 100)}%
+                          </div>
+                        </div>
+
+                        <button
+                          disabled={blocked || assigningId}
+                          onClick={() =>
+                            assign(techId, c)
+                          }
+                          className={`px-3 py-1 rounded text-sm ${
+                            blocked
+                              ? "bg-slate-300 dark:bg-slate-700 cursor-not-allowed"
+                              : "bg-indigo-600 text-white"
+                          }`}
+                        >
+                          {blocked
+                            ? "Blocked"
+                            : assigningId === techId
+                            ? "Assigning…"
+                            : "Assign"}
+                        </button>
+                      </div>
+
+                      {/* Why recommended */}
+                      {reasons.length > 0 && (
+                        <div className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+                          <div className="font-semibold mb-1">
+                            Why backend recommended this tech
+                          </div>
+                          <ul className="list-disc pl-4 space-y-0.5">
+                            {reasons.map((r, i) => (
+                              <li key={i}>{r}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Contradiction flag */}
+                      {blocked && reasons.length > 0 && (
+                        <div className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+                          ⚠ Model recommendation conflicts with
+                          fatigue policy
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="mt-4 flex justify-end">
-          <button className="btn btn-ghost mr-2" onClick={onClose}>Close</button>
+        {/* Footer */}
+        <div className="p-4 border-t dark:border-slate-700 flex justify-end">
+          <button onClick={onClose}>Close</button>
         </div>
       </div>
     </div>

@@ -91,8 +91,10 @@ export default function ManagerJobs() {
               <div className={`text-sm ${smallMuted}`}>{job.address}</div>
               <div className={`text-xs ${muted} mt-1`}>
                 Status: <strong className={titleClass}>{job.status || "—"}</strong>
-                {job.assigned_technician?.user?.username && (
-                  <span className="ml-3">Assigned: <strong className={titleClass}>{job.assigned_technician.user.username}</strong></span>
+                {job.assigned_technician_summary?.username && (
+                  <span className="ml-3">
+                    Assigned: <strong className={titleClass}>{job.assigned_technician_summary.username}</strong>
+                  </span>
                 )}
               </div>
             </div>

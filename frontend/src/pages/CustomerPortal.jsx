@@ -1,5 +1,5 @@
 // frontend/src/pages/CustomerPortal.jsx
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
 import L from "leaflet";
@@ -13,14 +13,20 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://unpkg.com/leaflet@1.9.3/dist/images/marker-shadow.png",
 });
 
-/* UI primitives */
+/* ---------------------------
+   UI primitives (Tailwind)
+   - Safe dark mode: avoid pure black; use slate-700/800 surfaces
+   --------------------------- */
 function Button({ children, variant = "primary", small = false, ...rest }) {
-  const base = "inline-flex items-center justify-center rounded-lg font-semibold focus:outline-none focus:ring-2 focus:ring-offset-2";
+  const base = "inline-flex items-center justify-center rounded-lg font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2";
   const size = small ? "px-3 py-1 text-sm" : "px-4 py-2 text-sm";
   const variants = {
-    primary: "bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-500",
-    ghost: "bg-transparent border border-gray-200 dark:border-[#172033] text-gray-800 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-[#071017] focus:ring-gray-300",
-    danger: "bg-rose-500 text-white hover:bg-rose-600 focus:ring-rose-400",
+    primary:
+      "bg-emerald-600 hover:bg-emerald-500 text-white focus-visible:ring-emerald-300 dark:bg-emerald-500 dark:hover:bg-emerald-400",
+    ghost:
+      "bg-transparent border border-gray-200 dark:border-slate-700 text-gray-800 dark:text-slate-100 hover:bg-gray-50 dark:hover:bg-slate-700 focus-visible:ring-gray-300",
+    danger:
+      "bg-rose-500 hover:bg-rose-600 text-white focus-visible:ring-rose-400",
   };
   return (
     <button className={`${base} ${size} ${variants[variant] || variants.primary}`} {...rest}>
@@ -28,15 +34,18 @@ function Button({ children, variant = "primary", small = false, ...rest }) {
     </button>
   );
 }
+
 function Card({ children, className = "" }) {
-  return <div className={`bg-white dark:bg-[#071017] border border-gray-100 dark:border-[#0b1220] rounded-xl p-4 shadow-sm ${className}`}>{children}</div>;
+  // Use slightly elevated surface in dark mode (slate-800) not pitch black
+  return <div className={`bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-4 shadow-sm ${className}`}>{children}</div>;
 }
+
 function Badge({ children, tone = "muted" }) {
   const styles = {
-    muted: "bg-gray-100 text-gray-700 dark:bg-[#0b1220] dark:text-gray-200",
-    success: "bg-emerald-50 text-emerald-700",
-    info: "bg-sky-50 text-sky-700",
-    warn: "bg-amber-50 text-amber-700",
+    muted: "bg-gray-100 text-gray-700 dark:bg-slate-700 dark:text-slate-100",
+    success: "bg-emerald-50 text-emerald-700 dark:bg-emerald-800 dark:text-emerald-200",
+    info: "bg-sky-50 text-sky-700 dark:bg-sky-900 dark:text-sky-200",
+    warn: "bg-amber-50 text-amber-700 dark:bg-amber-900 dark:text-amber-200",
   };
   return <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${styles[tone] || styles.muted}`}>{children}</span>;
 }
@@ -57,21 +66,24 @@ function Modal({ open, onClose, title, children }) {
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" aria-modal="true" role="dialog">
-      <div className="fixed inset-0 modal-backdrop bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div role="document" onClick={(e) => e.stopPropagation()} className="relative w-full max-w-4xl mx-4 modal-panel bg-white dark:bg-[#071017] border border-gray-200 dark:border-[#0b1220] rounded-2xl shadow-xl">
-        <div className="px-6 py-4 border-b border-gray-100 dark:border-[#0b1220] flex items-start justify-between">
-          <h3 className="text-lg font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-sm text-gray-500 dark:text-gray-300">Close</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div role="document" onClick={(e) => e.stopPropagation()} className="relative w-full max-w-3xl mx-auto bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-2xl shadow-xl overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 dark:border-slate-700 flex items-start justify-between">
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
+          <button onClick={onClose} className="text-sm text-slate-600 dark:text-slate-300 hover:underline">Close</button>
         </div>
-        <div className="max-h-[75vh] overflow-y-auto px-6 py-4">{children}</div>
+        <div className="max-h-[75vh] overflow-y-auto px-6 py-4">
+          {children}
+        </div>
       </div>
     </div>
   );
 }
+
 function Toast({ toast }) {
   if (!toast) return null;
-  const cls = toast.type === "error" ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-800";
+  const cls = toast.type === "error" ? "bg-rose-50 text-rose-700 dark:bg-rose-900 dark:text-rose-200" : "bg-emerald-50 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200";
   return (
     <div className="fixed bottom-6 right-6 z-60">
       <div className={`${cls} p-3 rounded shadow-md`}>{toast.text}</div>
@@ -87,7 +99,9 @@ function ClickableMap({ onClick }) {
   return null;
 }
 
-/* Main component */
+/* ---------------------------
+   CustomerPortal main
+   --------------------------- */
 export default function CustomerPortal({ customerId: propCustomerId = null, apiBase = "/api" }) {
   const { auth } = useAuth();
   const token = auth?.access ?? localStorage.getItem("access") ?? null;
@@ -123,6 +137,8 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
 
+  const scrollerRef = useRef(null);
+
   useEffect(() => {
     try { document.documentElement.setAttribute("data-theme", auth?.user?.profile?.theme || "dark"); } catch (e) {}
   }, [auth]);
@@ -132,33 +148,27 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  // ---------------------------
-  // Geocode: server-first approach
-  // ---------------------------
+  /* ---------------------------
+     Geocode: server-first approach
+     --------------------------- */
   const geocodeAddress = useCallback(async (address) => {
     if (!address || !address.trim()) return null;
-
-    // 1) Try backend endpoint first (recommended). Implement GET /api/geocode/?q=... on server.
     try {
       const backendUrl = `${apiBase.replace(/\/$/, "")}/geocode/?q=${encodeURIComponent(address)}`;
       const res = await fetch(backendUrl, { headers });
       if (res.ok) {
         const payload = await res.json();
-        // Accept multiple shapes: {lat,lon,label} or {latitude,longitude,display_name}
         const lat = payload.lat ?? payload.latitude ?? payload.lat_dd ?? null;
         const lon = payload.lon ?? payload.longitude ?? payload.lon_dd ?? null;
         const label = payload.label ?? payload.display_name ?? payload.name ?? null;
         if (lat != null && lon != null) return { lat: Number(lat), lon: Number(lon), label: label ?? address };
       } else {
-        // backend returned non-OK (maybe endpoint not implemented)
         console.warn("backend geocode responded", res.status);
       }
     } catch (e) {
       console.warn("backend geocode error", e);
     }
 
-    // 2) Fallback: do NOT call nominatim directly from browser by default (CORS/UA issues).
-    //    This is intentionally skipped — inform the user to enable server-side geocode.
     setToast({
       type: "error",
       text: "Geocoding not available from client. Please enable the server-side /api/geocode/ endpoint.",
@@ -166,9 +176,9 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
     return null;
   }, [apiBase, headers]);
 
-  // ---------------------------
-  // Browser geolocation helper
-  // ---------------------------
+  /* ---------------------------
+     Geolocation (browser)
+     --------------------------- */
   function useMyLocation() {
     if (!navigator.geolocation) {
       setToast({ type: "error", text: "Geolocation not supported by your browser." });
@@ -190,9 +200,9 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
     );
   }
 
-  // ---------------------------
-  // Fetch skills & requests
-  // ---------------------------
+  /* ---------------------------
+     Fetch skills & requests
+     --------------------------- */
   const fetchSkills = useCallback(async () => {
     setSkillsLoading(true); setSkillsError(null);
     try {
@@ -204,7 +214,10 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
       if (Array.isArray(data)) list = data;
       else if (Array.isArray(data.results)) list = data.results;
       else list = data.items || [];
-      const norm = list.map((s) => ({ id: s.id ?? s.pk ?? s.skill_id, name: s.name ?? s.title ?? s.display_name ?? (s.slug || `skill-${s.id}`) }));
+      const norm = list.map((s) => ({
+        id: s.id ?? s.pk ?? s.skill_id,
+        name: s.name ?? s.title ?? s.display_name ?? (s.slug || `skill-${s.id}`),
+      }));
       setSkills(norm);
     } catch (err) {
       console.error(err);
@@ -236,7 +249,6 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
       if (Array.isArray(data)) list = data;
       else if (Array.isArray(data.requests)) list = data.requests;
       else if (Array.isArray(data.results)) list = data.results;
-      else if (Array.isArray(data.traces)) list = data.traces;
       else if (Array.isArray(data.jobs)) list = data.jobs;
       else list = data.items || [];
 
@@ -285,7 +297,6 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
     e && e.preventDefault();
     setSubmitting(true); setError(null);
 
-    // Validation
     if (!form.address || form.address.trim().length < 5) { setToast({ type: "error", text: "Address is required (min 5 characters)" }); setSubmitting(false); return; }
     if (!form.notes || form.notes.trim().length < 3) { setToast({ type: "error", text: "Please provide a short description (min 3 characters)." }); setSubmitting(false); return; }
     if (skills.length > 0 && (!form.required_skill_ids || form.required_skill_ids.length === 0)) { setToast({ type: "error", text: "Please select at least one required skill." }); setSubmitting(false); return; }
@@ -304,7 +315,6 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
         lon: form.lon ?? null,
       };
 
-      // Fallback geocode on submit if missing (server-first)
       if ((body.lat == null || body.lon == null) && body.address) {
         const g = await geocodeAddress(body.address);
         if (g) { body.lat = g.lat; body.lon = g.lon; updateForm({ lat: g.lat, lon: g.lon }); }
@@ -327,11 +337,11 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
   function openDetails(req) { setSelectedRequest(req); setShowDetailModal(true); }
   function closeDetails() { setSelectedRequest(null); setShowDetailModal(false); }
 
-  const summaryPending = requests.filter((r) => r.status === "pending" || r.status === "new").length;
-  const summaryInProgress = requests.filter((r) => r.status === "in_progress" || r.status === "assigned").length;
-  const summaryCompleted = requests.filter((r) => r.status === "completed" || r.status === "done").length;
+  const summaryPending = requests.filter((r) => (r.status === "pending" || r.status === "new")).length;
+  const summaryInProgress = requests.filter((r) => (r.status === "in_progress" || r.status === "assigned")).length;
+  const summaryCompleted = requests.filter((r) => (r.status === "completed" || r.status === "done")).length;
 
-  /* JobCard (defensive) */
+  /* JobCard */
   function JobCard({ job }) {
     const status = (job.status || "").toLowerCase();
     const label = status === "completed" || status === "done" ? "Completed" : status === "assigned" ? "Assigned" : status === "in_progress" ? "In progress" : status || "Pending";
@@ -341,21 +351,21 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
       : (job.assigned_technician || "Unassigned");
 
     return (
-      <article className="bg-white dark:bg-[#071017] border rounded-xl p-4 shadow-sm hover:shadow-md transition" role="article" aria-label={`Job ${job.id}`}>
+      <article className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-4 shadow-sm hover:shadow-md transition" role="article" aria-label={`Job ${job.id}`}>
         <div className="flex items-start justify-between gap-4">
-          <div className="flex-1">
-            <div className="text-sm text-slate-400">{job.customer_name}</div>
-            <div className="text-lg font-semibold mt-1">{job.title}</div>
-            <div className="text-sm text-slate-500 mt-1 break-words">{job.address || "—"}</div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm text-slate-400 dark:text-slate-300 truncate">{job.customer_name}</div>
+            <div className="text-lg font-semibold mt-1 truncate">{job.title}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-300 mt-1 break-words">{job.address || "—"}</div>
           </div>
           <div className="text-right flex-shrink-0">
             <div className="mb-2"><Badge tone={tone}>{label}</Badge></div>
-            <div className="text-xs text-slate-400">ETA: {job.estimated_arrival || "—"}</div>
+            <div className="text-xs text-slate-400 dark:text-slate-300">ETA: {job.estimated_arrival || "—"}</div>
           </div>
         </div>
 
         <div className="mt-3 flex items-center justify-between gap-2">
-          <div className="text-xs text-slate-500">Assigned: <strong className="text-slate-700">{assigned}</strong></div>
+          <div className="text-xs text-slate-500 dark:text-slate-300">Assigned: <strong className="text-slate-700 dark:text-slate-100">{assigned}</strong></div>
           <div>
             <Button variant="ghost" small onClick={() => openDetails(job)}>View</Button>
           </div>
@@ -366,12 +376,12 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
 
   /* Render */
   return (
-    <div className="max-w-7xl mx-auto p-6">
-      <header className="flex items-center justify-between gap-4 mb-6">
+    <div className="max-w-5xl mx-auto p-6">
+      <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Service Portal</h1>
-          <div className="text-sm text-gray-500 dark:text-gray-300 mt-1">{companyName}</div>
-          <div className="text-xs text-gray-400 mt-1">Customer id: <strong>{customerId ?? "—"}</strong></div>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Service Portal</h1>
+          <div className="text-sm text-slate-600 dark:text-slate-300 mt-1">{companyName}</div>
+          <div className="text-xs text-slate-400 dark:text-slate-400 mt-1">Customer id: <strong className="text-slate-700 dark:text-slate-100">{customerId ?? "—"}</strong></div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -381,42 +391,46 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
       </header>
 
       <section className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <Card className="rounded-lg">
-          <div className="text-sm text-gray-500 dark:text-gray-300">New Service Request</div>
-          <div className="text-3xl font-semibold mt-2">{summaryPending}</div>
-          <div className="text-xs text-gray-400 mt-1">Requests awaiting submission or review</div>
+        <Card>
+          <div className="text-sm text-slate-600 dark:text-slate-300">New Requests</div>
+          <div className="text-3xl font-semibold mt-2 text-slate-900 dark:text-slate-100">{summaryPending}</div>
+          <div className="text-xs text-slate-400 mt-1">Requests awaiting submission or review</div>
         </Card>
 
-        <Card className="rounded-lg">
-          <div className="text-sm text-gray-500 dark:text-gray-300">In Progress</div>
-          <div className="text-2xl font-semibold mt-2">{summaryInProgress}</div>
+        <Card>
+          <div className="text-sm text-slate-600 dark:text-slate-300">In Progress</div>
+          <div className="text-2xl font-semibold mt-2 text-slate-900 dark:text-slate-100">{summaryInProgress}</div>
         </Card>
 
-        <Card className="rounded-lg">
-          <div className="text-sm text-gray-500 dark:text-gray-300">Completed</div>
-          <div className="text-2xl font-semibold mt-2">{summaryCompleted}</div>
+        <Card>
+          <div className="text-sm text-slate-600 dark:text-slate-300">Completed</div>
+          <div className="text-2xl font-semibold mt-2 text-slate-900 dark:text-slate-100">{summaryCompleted}</div>
         </Card>
       </section>
 
       <section>
-        <h2 className="text-lg font-semibold mb-2">Your Service Requests</h2>
-        {loading && <div className="text-sm text-gray-500 mb-2">Loading...</div>}
-        {error && <div className="text-sm text-rose-700 bg-rose-50 p-3 rounded mb-2">{error}</div>}
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Your Service Requests</h2>
+          <div className="text-sm text-slate-500 dark:text-slate-300">{requests.length} total</div>
+        </div>
+
+        {loading && <div className="text-sm text-slate-500 dark:text-slate-300 mb-2">Loading...</div>}
+        {error && <div className="text-sm text-rose-700 bg-rose-50 dark:bg-rose-900 dark:text-rose-200 p-3 rounded mb-2">{error}</div>}
 
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {!loading && requests.length === 0 && (
-            <div className="bg-white dark:bg-[#071017] border rounded-xl p-6 text-center text-gray-500 dark:text-gray-300">No requests yet. Click <button onClick={() => setShowNewModal(true)} className="underline">New Service Request</button>.</div>
+            <div className="bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-xl p-6 text-center text-slate-500 dark:text-slate-300">No requests yet. Click <button onClick={() => setShowNewModal(true)} className="underline">New Service Request</button>.</div>
           )}
 
           {loading && Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="p-4 rounded-xl bg-white dark:bg-[#071017] border border-gray-100 dark:border-[#0b1220] animate-pulse h-36" />
+            <div key={i} className="p-4 rounded-xl bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 animate-pulse h-36" />
           ))}
 
           {!loading && requests.map((r) => (<JobCard key={r.id} job={r} />))}
         </div>
       </section>
 
-      <footer className="mt-8 text-sm text-gray-500 dark:text-gray-300">Need Help? Our system assigns the best technician based on skills and availability. You&apos;ll receive updates via email and SMS.</footer>
+      <footer className="mt-8 text-sm text-slate-500 dark:text-slate-300">Need Help? Our system assigns the best technician based on skills and availability. You'll receive updates via email and SMS.</footer>
 
       <Toast toast={toast} />
 
@@ -425,12 +439,12 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
         <form onSubmit={submitNewRequest} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="text-sm text-gray-500 dark:text-gray-300">Your name</label>
-              <input value={form.customer_name} onChange={(e) => updateForm({ customer_name: e.target.value })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" placeholder="Full name" />
+              <label className="text-sm text-slate-600 dark:text-slate-300">Your name</label>
+              <input value={form.customer_name} onChange={(e) => updateForm({ customer_name: e.target.value })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100" placeholder="Full name" />
             </div>
 
             <div>
-              <label className="text-sm text-gray-500 dark:text-gray-300">Address <span className="text-xs text-gray-400">(required)</span></label>
+              <label className="text-sm text-slate-600 dark:text-slate-300">Address <span className="text-xs text-slate-400">(required)</span></label>
               <input
                 value={form.address}
                 onChange={(e) => updateForm({ address: e.target.value })}
@@ -439,7 +453,7 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
                   const g = await geocodeAddress(form.address);
                   if (g) { updateForm({ lat: g.lat, lon: g.lon }); setToast({ type: 'info', text: `Location found: ${g.label || form.address}` }); }
                 }}
-                className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]"
+                className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100"
                 placeholder="Street, city, etc."
               />
 
@@ -451,47 +465,47 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
                   updateForm({ lat: g.lat, lon: g.lon }); setToast({ type: 'info', text: `Location found: ${g.label || form.address}` });
                 }}>Locate</Button>
 
-                <Button type="button" variant="ghost" small onClick={() => { updateForm({ lat: null, lon: null }); setToast({ type: 'info', text: 'Cleared saved location' }); }}>Clear location</Button>
+                <Button type="button" variant="ghost" small onClick={() => { updateForm({ lat: null, lon: null }); setToast({ type: 'info', text: 'Cleared saved location' }); }}>Clear</Button>
 
                 <Button type="button" variant="ghost" small onClick={() => useMyLocation()}>Use my location</Button>
 
-                <div className="ml-auto text-xs text-gray-400">Lat: <strong>{form.lat ?? '—'}</strong> · Lon: <strong>{form.lon ?? '—'}</strong></div>
+                <div className="ml-auto text-xs text-slate-400 dark:text-slate-300">Lat: <strong>{form.lat ?? '—'}</strong> · Lon: <strong>{form.lon ?? '—'}</strong></div>
               </div>
             </div>
 
             <div className="md:col-span-2">
-              <label className="text-sm text-gray-500 dark:text-gray-300">Description / Issue <span className="text-xs text-gray-400">(required)</span></label>
-              <textarea value={form.notes} onChange={(e) => updateForm({ notes: e.target.value })} rows={4} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" placeholder="Describe the issue..." />
+              <label className="text-sm text-slate-600 dark:text-slate-300">Description / Issue <span className="text-xs text-slate-400">(required)</span></label>
+              <textarea value={form.notes} onChange={(e) => updateForm({ notes: e.target.value })} rows={4} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100" placeholder="Describe the issue..." />
             </div>
 
             <div>
-              <label className="text-sm text-gray-500 dark:text-gray-300">Preferred start (optional)</label>
-              <input type="datetime-local" value={form.requested_window_start} onChange={(e) => updateForm({ requested_window_start: e.target.value })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" />
+              <label className="text-sm text-slate-600 dark:text-slate-300">Preferred start (optional)</label>
+              <input type="datetime-local" value={form.requested_window_start} onChange={(e) => updateForm({ requested_window_start: e.target.value })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100" />
             </div>
 
             <div>
-              <label className="text-sm text-gray-500 dark:text-gray-300">Preferred end (optional)</label>
-              <input type="datetime-local" value={form.requested_window_end} onChange={(e) => updateForm({ requested_window_end: e.target.value })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" />
+              <label className="text-sm text-slate-600 dark:text-slate-300">Preferred end (optional)</label>
+              <input type="datetime-local" value={form.requested_window_end} onChange={(e) => updateForm({ requested_window_end: e.target.value })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100" />
             </div>
 
             <div>
-              <label className="text-sm text-gray-500 dark:text-gray-300">Estimated duration (min)</label>
-              <input type="number" min={5} value={form.estimated_duration_minutes} onChange={(e) => updateForm({ estimated_duration_minutes: Number(e.target.value) })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" />
+              <label className="text-sm text-slate-600 dark:text-slate-300">Estimated duration (min)</label>
+              <input type="number" min={5} value={form.estimated_duration_minutes} onChange={(e) => updateForm({ estimated_duration_minutes: Number(e.target.value) })} className="w-full mt-1 p-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100" />
             </div>
 
             <div>
-              <label className="text-sm text-gray-500 dark:text-gray-300">Required skills {skills.length > 0 ? <span className="text-xs text-gray-400">(select one or more)</span> : <span className="text-xs text-gray-400">(optional)</span>}</label>
+              <label className="text-sm text-slate-600 dark:text-slate-300">Required skills {skills.length > 0 ? <span className="text-xs text-slate-400">(select one or more)</span> : <span className="text-xs text-slate-400">(optional)</span>}</label>
               <div className="mt-2 flex flex-wrap gap-2">
-                {skillsLoading ? <div className="text-sm text-gray-500">Loading skills…</div> : skills.length === 0 ? <div className="text-sm text-gray-500">No skills configured.</div> : skills.map((s) => {
+                {skillsLoading ? <div className="text-sm text-slate-500 dark:text-slate-300">Loading skills…</div> : skills.length === 0 ? <div className="text-sm text-slate-500 dark:text-slate-300">No skills configured.</div> : skills.map((s) => {
                   const active = (form.required_skill_ids || []).includes(s.id);
                   return (
-                    <button key={s.id} type="button" onClick={() => toggleSkill(s.id)} className={`px-3 py-1 rounded-full text-xs font-medium ${active ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-800 dark:bg-[#0b1220] dark:text-gray-200"}`}>{s.name}</button>
+                    <button key={s.id} type="button" onClick={() => toggleSkill(s.id)} className={`px-3 py-1 rounded-full text-xs font-medium ${active ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-800 dark:bg-slate-700 dark:text-slate-100"}`}>{s.name}</button>
                   );
                 })}
               </div>
 
               {skills.length > 0 && (
-                <select multiple value={form.required_skill_ids.map(String)} onChange={(e) => { const opts = Array.from(e.target.selectedOptions).map((o) => Number(o.value)); updateForm({ required_skill_ids: opts }); }} className="w-full mt-2 p-2 rounded-lg border border-gray-200 dark:border-[#0b1220] bg-white dark:bg-[#071017]" size={4}>
+                <select multiple value={form.required_skill_ids.map(String)} onChange={(e) => { const opts = Array.from(e.target.selectedOptions).map((o) => Number(o.value)); updateForm({ required_skill_ids: opts }); }} className="w-full mt-2 p-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100" size={4}>
                   {skills.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               )}
@@ -500,8 +514,8 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
 
             {/* Map preview */}
             <div className="md:col-span-2">
-              <label className="text-sm text-gray-500 dark:text-gray-300">Location preview (click map to set marker)</label>
-              <div className="mt-2 rounded-lg overflow-hidden border border-gray-200 dark:border-[#0b1220]" style={{ height: 260 }}>
+              <label className="text-sm text-slate-600 dark:text-slate-300">Location preview (click map to set marker)</label>
+              <div className="mt-2 rounded-lg overflow-hidden border border-gray-200 dark:border-slate-700" style={{ height: 300 }}>
                 {form.lat && form.lon ? (
                   <MapContainer center={[form.lat, form.lon]} zoom={14} style={{ height: '100%', width: '100%' }}>
                     <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
@@ -517,7 +531,7 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
                   </MapContainer>
                 )}
               </div>
-              <div className="text-xs text-gray-400 mt-2">Latitude: <strong>{form.lat ?? '—'}</strong> · Longitude: <strong>{form.lon ?? '—'}</strong></div>
+              <div className="text-xs text-slate-400 dark:text-slate-300 mt-2">Latitude: <strong>{form.lat ?? '—'}</strong> · Longitude: <strong>{form.lon ?? '—'}</strong></div>
             </div>
           </div>
 
@@ -532,20 +546,20 @@ export default function CustomerPortal({ customerId: propCustomerId = null, apiB
       <Modal open={showDetailModal} onClose={closeDetails} title={selectedRequest ? (selectedRequest.title || `Request #${selectedRequest.id}`) : 'Request details'}>
         {selectedRequest ? (
           <div className="space-y-3">
-            <div className="text-sm text-gray-500">Customer</div>
-            <div className="font-medium">{selectedRequest.customer_name}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-300">Customer</div>
+            <div className="font-medium text-slate-900 dark:text-slate-100">{selectedRequest.customer_name}</div>
 
-            <div className="text-sm text-gray-500 mt-2">Address</div>
+            <div className="text-sm text-slate-500 dark:text-slate-300 mt-2">Address</div>
             <div>{selectedRequest.address || '—'}</div>
 
-            <div className="text-sm text-gray-500 mt-2">Assigned technician</div>
+            <div className="text-sm text-slate-500 dark:text-slate-300 mt-2">Assigned technician</div>
             <div>{selectedRequest.assigned_technician && typeof selectedRequest.assigned_technician === 'object' ? (selectedRequest.assigned_technician.display_name || selectedRequest.assigned_technician.username) : (selectedRequest.assigned_technician || 'Unassigned')}</div>
 
-            <div className="text-sm text-gray-500 mt-2">Required skills</div>
-            <div>{Array.isArray(selectedRequest.required_skill_ids) && selectedRequest.required_skill_ids.length > 0 ? selectedRequest.required_skill_ids.join(', ') : <span className="text-gray-400">None specified</span>}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-300 mt-2">Required skills</div>
+            <div>{Array.isArray(selectedRequest.required_skill_ids) && selectedRequest.required_skill_ids.length > 0 ? selectedRequest.required_skill_ids.join(', ') : <span className="text-slate-400 dark:text-slate-500">None specified</span>}</div>
 
-            <div className="text-sm text-gray-500 mt-2">Notes</div>
-            <div className="p-3 rounded bg-gray-50 dark:bg-[#071017] whitespace-pre-wrap">{selectedRequest.notes || '—'}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-300 mt-2">Notes</div>
+            <div className="p-3 rounded bg-gray-50 dark:bg-slate-700 whitespace-pre-wrap text-slate-900 dark:text-slate-100">{selectedRequest.notes || '—'}</div>
 
             <div className="flex justify-end">
               <Button variant="primary" onClick={closeDetails}>Done</Button>

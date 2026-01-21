@@ -8,7 +8,7 @@ from .models import Profile, Assignment
 
 logger = logging.getLogger(__name__)
 
-# Try to import task helpers, but do not let missing celery/tasks break startup.
+# Try to import optional tasks but don't crash if not available
 try:
     from .tasks import regenerate_itinerary_task, auto_assign_job_task  # may be dummy or real
 except Exception as exc:
@@ -23,14 +23,11 @@ User = get_user_model()
 def create_or_update_profile(sender, instance, created, **kwargs):
     """
     Ensure a Profile exists for each User in a safe, idempotent way.
-
-    - Always uses get_or_create which is idempotent under concurrent loads.
-    - After obtaining the Profile, it populates the user's reverse-relation cache
-      so code still holding the User instance sees the saved Profile with a real PK.
-    - Errors are logged but not re-raised (signals should be robust).
+    Uses get_or_create to avoid duplicate-key errors and populates the instance cache.
     """
     try:
-        profile, _ = Profile.objects.get_or_create(user=instance)
+        profile, created_flag = Profile.objects.get_or_create(user=instance)
+        # Cache profile on the user object so admin code can access instance.profile immediately.
         try:
             setattr(instance, "_profile_cache", profile)
         except Exception:
@@ -44,7 +41,6 @@ def assignment_saved(sender, instance, created, **kwargs):
     tech = getattr(instance, "technician", None)
     if not tech:
         return
-
     try:
         if regenerate_itinerary_task is not None:
             regenerate_itinerary_task.delay(tech.id)
@@ -59,7 +55,6 @@ def assignment_deleted(sender, instance, **kwargs):
     tech = getattr(instance, "technician", None)
     if not tech:
         return
-
     try:
         if regenerate_itinerary_task is not None:
             regenerate_itinerary_task.delay(tech.id)

@@ -1027,6 +1027,8 @@ class AutoAssignAPIView(APIView):
         return Response({"assigned": False, "auto_assign_summary": summary})
 
 
+
+
 # core/views.py (append)
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -1354,3 +1356,72 @@ def ml_model_info(request):
     if os.path.exists(meta_path):
         return JsonResponse(json.loads(open(meta_path).read()))
     return JsonResponse({'error': 'meta not found'}, status=404)
+
+# backend/core/views.py (append)
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status, permissions
+from django.shortcuts import get_object_or_404
+
+from .models import Technician, Job, Assignment
+from .serializers import TechnicianWorkloadSerializer
+from .auto_assign import compute_fatigue_metrics, _normalize_fatigue_map, rule_based_candidates, choose_best_candidate
+
+class TechnicianWorkloadAPIView(APIView):
+    """
+    GET /api/technicians/workload/
+    Returns list of technicians with fatigue metrics and AI recommendation score (lower == better).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        # fetch technicians (optionally filter active)
+        tech_qs = Technician.objects.select_related("user").prefetch_related("skills").all()
+        now = timezone.now()
+        metrics = compute_fatigue_metrics(technicians_qs=tech_qs, now=now)
+        _normalize_fatigue_map(metrics)
+
+        results = []
+        for tech in tech_qs:
+            m = metrics.get(tech.id, {})
+            results.append({
+                "technician": {
+                    "id": tech.id,
+                    "username": getattr(getattr(tech, "user", None), "username", None),
+                    "status": tech.status,
+                },
+                "assigned_count": int(m.get("assigned_count", 0)),
+                "recent_completed_count": int(m.get("recent_completed_count", 0)),
+                "fatigue_raw": float(m.get("fatigue_raw", 0.0)),
+                "fatigue_score": float(m.get("fatigue_score", 0.0)),
+                # simple recommendation score (lower better) -- you can replace with more advanced computation
+                "recommendation_score": float(1.0 - m.get("fatigue_score", 0.0)),
+            })
+
+        # sort ascending by fatigue_score (lowest burden first)
+        results_sorted = sorted(results, key=lambda r: r["fatigue_score"])
+        return Response({"count": len(results_sorted), "items": results_sorted}, status=status.HTTP_200_OK)
+
+
+# Optionally augment JobCandidatesAPIView to include fatigue and AI recommendation metadata.
+# If you already have JobCandidatesAPIView, modify its loop to include fatigue map details; else add a new endpoint.
+
+class JobCandidatesWithFatigueAPIView(APIView):
+    """
+    GET /api/jobs/{job_id}/candidates_with_fatigue/
+    Returns candidates with fatigue metrics and explanation for UI.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, job_id=None):
+        job = get_object_or_404(Job, pk=job_id)
+        tech_qs = Technician.objects.select_related("user").prefetch_related("skills").all()
+        res = rule_based_candidates(job, technicians_qs=tech_qs, top_n=20)
+        # mark ai_recommendation (chosen)
+        chosen_id = res.get("chosen", {}).get("technician_id")
+        candidates = res.get("candidates", [])
+        for c in candidates:
+            c["ai_recommendation"] = (c.get("technician_id") == chosen_id)
+            # friendly warning for high fatigue
+            c["warning"] = True if c.get("fatigue_score", 0.0) >= 0.8 else False
+        return Response({"job_id": job.id, "chosen": res.get("chosen"), "candidates": candidates})

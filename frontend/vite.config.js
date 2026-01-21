@@ -5,15 +5,21 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: true,
     port: 5173,
     proxy: {
-      // forward /api/* to Django backend
-      "/api": {
-        target: "http://localhost:8000",
+      // Forward all /api calls to Django dev server
+      '/api': {
+        target: 'http://localhost:8000',
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path // keep /api/... the same
-      }
-    }
-  }
+      },
+      // if you serve static files from Django in dev:
+      '/static': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
 });

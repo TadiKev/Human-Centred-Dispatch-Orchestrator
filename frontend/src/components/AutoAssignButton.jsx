@@ -16,7 +16,8 @@ export default function AutoAssignButton({ jobId, onAssigned }) {
         body: { assign: true, reason: "Auto-rule dispatch" },
         token
       });
-      alert("Auto assigned: " + (res.assignment?.technician?.user?.username ?? "unknown"));
+      alert("Auto assigned: " + (res.assignment?.technician?.username ?? "unknown"));
+
       if (onAssigned) onAssigned();
     } catch (e) {
       console.error(e);
