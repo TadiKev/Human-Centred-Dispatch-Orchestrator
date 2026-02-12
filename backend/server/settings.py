@@ -61,7 +61,12 @@ DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() in ("1", "true", "yes")
 AUTO_ASSIGN_MODE = "rules"
 
 # Hosts (comma-separated in env)
-_allowed = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
+
+_allowed = os.environ.get(
+    "DJANGO_ALLOWED_HOSTS",
+    "localhost,127.0.0.1,10.0.2.2"
+)
+
 ALLOWED_HOSTS = [h.strip() for h in _allowed.split(",") if h.strip()]
 
 # Installed apps
